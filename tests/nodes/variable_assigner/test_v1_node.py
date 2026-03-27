@@ -1,0 +1,140 @@
+import time
+
+from graphon.graph_events.node import NodeRunSucceededEvent, NodeRunVariableUpdatedEvent
+from graphon.nodes.variable_assigner.common import helpers as common_helpers
+from graphon.nodes.variable_assigner.v1.node import VariableAssignerNode
+from graphon.nodes.variable_assigner.v1.node_data import WriteMode
+from graphon.runtime import GraphRuntimeState
+from graphon.variables import ArrayStringVariable, StringVariable
+
+from ...helpers import build_graph_init_params, build_variable_pool
+
+
+def _build_node(*, variable_pool, assigned_selector, write_mode, input_selector):
+    graph_config = {"nodes": [], "edges": []}
+    init_params = build_graph_init_params(graph_config=graph_config)
+    runtime_state = GraphRuntimeState(
+        variable_pool=variable_pool, start_at=time.perf_counter()
+    )
+
+    return VariableAssignerNode(
+        id="assigner",
+        graph_init_params=init_params,
+        graph_runtime_state=runtime_state,
+        config={
+            "id": "assigner",
+            "data": {
+                "title": "Variable Assigner",
+                "assigned_variable_selector": assigned_selector,
+                "write_mode": write_mode,
+                "input_variable_selector": input_selector,
+            },
+        },
+    )
+
+
+def test_overwrite_string_variable():
+    conversation_variable = StringVariable(
+        name="test_conversation_variable", value="the first value"
+    )
+    input_variable = StringVariable(
+        name="test_string_variable", value="the second value"
+    )
+
+    variable_pool = build_variable_pool(
+        conversation_variables=[conversation_variable],
+        variables=[(("node_id", input_variable.name), input_variable)],
+    )
+    node = _build_node(
+        variable_pool=variable_pool,
+        assigned_selector=("conversation", conversation_variable.name),
+        write_mode=WriteMode.OVER_WRITE,
+        input_selector=("node_id", input_variable.name),
+    )
+
+    events = list(node.run())
+    updated_event = next(
+        event for event in events if isinstance(event, NodeRunVariableUpdatedEvent)
+    )
+    succeeded_event = next(
+        event for event in events if isinstance(event, NodeRunSucceededEvent)
+    )
+    updated_variables = common_helpers.get_updated_variables(
+        succeeded_event.node_run_result.process_data
+    )
+
+    assert updated_variables is not None
+    assert updated_variables[0].name == conversation_variable.name
+    assert updated_variables[0].new_value == input_variable.value
+    assert updated_event.variable.value == "the second value"
+    assert tuple(updated_event.variable.selector) == (
+        "conversation",
+        conversation_variable.name,
+    )
+    assert succeeded_event.node_run_result.inputs == {"value": "the second value"}
+
+
+def test_append_variable_to_array():
+    conversation_variable = ArrayStringVariable(
+        name="test_conversation_variable", value=["the first value"]
+    )
+    input_variable = StringVariable(
+        name="test_string_variable", value="the second value"
+    )
+
+    variable_pool = build_variable_pool(
+        conversation_variables=[conversation_variable],
+        variables=[(("node_id", input_variable.name), input_variable)],
+    )
+    node = _build_node(
+        variable_pool=variable_pool,
+        assigned_selector=("conversation", conversation_variable.name),
+        write_mode=WriteMode.APPEND,
+        input_selector=("node_id", input_variable.name),
+    )
+
+    events = list(node.run())
+    updated_event = next(
+        event for event in events if isinstance(event, NodeRunVariableUpdatedEvent)
+    )
+    succeeded_event = next(
+        event for event in events if isinstance(event, NodeRunSucceededEvent)
+    )
+    updated_variables = common_helpers.get_updated_variables(
+        succeeded_event.node_run_result.process_data
+    )
+
+    assert updated_variables is not None
+    assert updated_variables[0].name == conversation_variable.name
+    assert updated_variables[0].new_value == ["the first value", "the second value"]
+    assert updated_event.variable.value == ["the first value", "the second value"]
+
+
+def test_clear_array():
+    conversation_variable = ArrayStringVariable(
+        name="test_conversation_variable", value=["the first value"]
+    )
+
+    variable_pool = build_variable_pool(conversation_variables=[conversation_variable])
+    node = _build_node(
+        variable_pool=variable_pool,
+        assigned_selector=("conversation", conversation_variable.name),
+        write_mode=WriteMode.CLEAR,
+        input_selector=(),
+    )
+
+    events = list(node.run())
+    updated_event = next(
+        event for event in events if isinstance(event, NodeRunVariableUpdatedEvent)
+    )
+    succeeded_event = next(
+        event for event in events if isinstance(event, NodeRunSucceededEvent)
+    )
+    updated_variables = common_helpers.get_updated_variables(
+        succeeded_event.node_run_result.process_data
+    )
+
+    assert updated_variables is not None
+    assert updated_variables[0].new_value == []
+    assert updated_event.variable.value == []
+    assert succeeded_event.node_run_result.inputs == {"value": []}

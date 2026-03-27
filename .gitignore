@@ -1,0 +1,14 @@
+# Byte-compiled
+__pycache__/
+
+# Distribution
+dist/
+
+# Unit test
+.pytest_cache/
+
+# Environments
+.venv
+
+# Ruff stuff:
+.ruff_cache/
