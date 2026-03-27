@@ -6,7 +6,8 @@ on:
       - main
 
 jobs:
-  prek:
+  check:
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -14,10 +15,10 @@ jobs:
 
       - name: Setup Python and uv
         uses: astral-sh/setup-uv@v7
-        with:
-          python-version: "3.12"
 
-      - name: Check and Test
-        run: |
-          uv sync --group dev
-          make check test
+      - name: Run checks
+        run: make check
+
+  test:
+    needs: check
+    uses: ./.github/workflows/test.yml

@@ -7,27 +7,7 @@ on:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          - "3.11"
-          - "3.12"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv and Python ${{ matrix.python-version }}
-        uses: astral-sh/setup-uv@v7
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Test with Python ${{ matrix.python-version }}
-        run: make test
+    uses: ./.github/workflows/test.yml
 
   build:
     name: Build release distributions

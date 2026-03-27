@@ -8,15 +8,15 @@ pre: format lint test
 
 .PHONY: format
 format:
-	ruff format
+	uv run ruff format
 
 .PHONY: lint
 lint:
-	ruff check --fix
+	uv run ruff check --fix
 
 .PHONY: check
 check:
-	ruff format --check && ruff check
+	uv run ruff format --check && uv run ruff check
 
 .PHONY: test
 test:
@@ -30,4 +30,4 @@ build:
 clean:
 	rm -rf dist/ .pytest_cache/
 	find . -type d -name '__pycache__' -prune -exec rm -rf {} +
-	ruff clean
+	uv run ruff clean
