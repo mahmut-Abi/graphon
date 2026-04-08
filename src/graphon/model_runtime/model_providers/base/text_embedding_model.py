@@ -33,14 +33,15 @@ class TextEmbeddingModel(AIModel):
                     texts=texts,
                     input_type=input_type,
                 )
-            if multimodel_documents:
-                return self.model_runtime.invoke_multimodal_embedding(
-                    provider=self.provider,
-                    model=model,
-                    credentials=credentials,
-                    documents=multimodel_documents,
-                    input_type=input_type,
-                )
+
+            assert multimodel_documents is not None
+            return self.model_runtime.invoke_multimodal_embedding(
+                provider=self.provider,
+                model=model,
+                credentials=credentials,
+                documents=multimodel_documents,
+                input_type=input_type,
+            )
         except Exception as e:
             raise self._transform_invoke_error(e) from e
 
