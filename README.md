@@ -46,37 +46,51 @@ make test
 `make dev` installs the project, syncs development dependencies, and sets up
 [`prek`](https://prek.j178.dev/) Git hooks.
 
-## Run the Example Workflow
+## Run the Example Workflows
 
-The repository includes a minimal runnable example at
-[`examples/graphon_openai_slim`](examples/graphon_openai_slim).
+The repository includes two runnable OpenAI Slim examples, each in its own
+directory under `examples/`:
 
-It builds and executes this workflow:
+- [`examples/openai_slim_minimal`](examples/openai_slim_minimal):
+  `start -> llm -> output`
+- [`examples/openai_slim_parallel_translation`](examples/openai_slim_parallel_translation):
+  `start -> 3 llm -> end`
 
-```text
-start -> llm -> output
-```
-
-To run it:
+To run the minimal example:
 
 ```bash
 make dev
 source .venv/bin/activate
-cd examples/graphon_openai_slim
+cd examples/openai_slim_minimal
 cp .env.example .env
 python3 workflow.py "Explain Graphon in one short sentence."
 ```
 
-Before running the example, fill in the required values in `.env`.
+To run the parallel translation example:
 
-The example currently expects:
+```bash
+make dev
+source .venv/bin/activate
+cd examples/openai_slim_parallel_translation
+cp .env.example .env
+python3 parallel_translation_workflow.py "Graph execution is a coordination problem."
+```
+
+Before running either example, fill in the required values in `.env`.
+
+The examples currently expect:
 
 - an `OPENAI_API_KEY`
 - a `SLIM_PLUGIN_ID`
 - a local `dify-plugin-daemon-slim` setup or equivalent Slim runtime
 
-For the exact environment variables and runtime notes, see
-[examples/graphon_openai_slim/README.md](examples/graphon_openai_slim/README.md).
+No `slim` executable is bundled under `examples/`; provide it via `PATH` or
+set `SLIM_BINARY_PATH` in the example `.env` file if needed.
+
+For the exact environment variables and runtime notes, see:
+
+- [examples/openai_slim_minimal/README.md](examples/openai_slim_minimal/README.md)
+- [examples/openai_slim_parallel_translation/README.md](examples/openai_slim_parallel_translation/README.md)
 
 ## How Graphon Fits Together
 
@@ -104,8 +118,8 @@ for event in engine.run():
 ```
 
 See
-[examples/graphon_openai_slim/workflow.py](examples/graphon_openai_slim/workflow.py)
-for the full example, including `SlimRuntime`, `SlimPreparedLLM`, graph
+[examples/openai_slim_minimal/workflow.py](examples/openai_slim_minimal/workflow.py)
+for the minimal example, including `SlimRuntime`, `SlimPreparedLLM`, graph
 construction, input seeding, and streamed output handling.
 
 ## Project Layout
@@ -126,8 +140,10 @@ construction, input seeding, and streamed output handling.
 ## Internal Docs
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): contributor workflow, CI, commit/PR rules
-- [examples/graphon_openai_slim/README.md](examples/graphon_openai_slim/README.md):
-  runnable example setup
+- [examples/openai_slim_minimal/README.md](examples/openai_slim_minimal/README.md):
+  minimal runnable example setup
+- [examples/openai_slim_parallel_translation/README.md](examples/openai_slim_parallel_translation/README.md):
+  parallel translation example setup
 - [src/graphon/model_runtime/README.md](src/graphon/model_runtime/README.md):
   model runtime overview
 - [src/graphon/graph_engine/layers/README.md](src/graphon/graph_engine/layers/README.md):

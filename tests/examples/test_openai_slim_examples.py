@@ -6,11 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from examples.graphon_openai_slim.workflow import (
-    ALLOWED_ENV_VARS,
-    load_env_file,
-    write_stream_chunk,
-)
+from examples.openai_slim_minimal.workflow import write_stream_chunk
+from examples.openai_slim_support import ALLOWED_ENV_VARS, load_env_file
 from graphon.enums import BuiltinNodeTypes
 from graphon.graph_events.node import NodeRunStreamChunkEvent
 
@@ -72,11 +69,18 @@ def test_load_env_file_rejects_unknown_key(tmp_path: Path) -> None:
         load_env_file(env_file)
 
 
-def test_env_example_matches_allowed_env_vars() -> None:
+@pytest.mark.parametrize(
+    "example_dir_name",
+    [
+        "openai_slim_minimal",
+        "openai_slim_parallel_translation",
+    ],
+)
+def test_env_example_matches_allowed_env_vars(example_dir_name: str) -> None:
     env_example = (
         Path(__file__).resolve().parents[2]
         / "examples"
-        / "graphon_openai_slim"
+        / example_dir_name
         / ".env.example"
     )
     keys = {
@@ -88,11 +92,18 @@ def test_env_example_matches_allowed_env_vars() -> None:
     assert keys == set(ALLOWED_ENV_VARS)
 
 
-def test_env_example_leaves_slim_binary_path_empty() -> None:
+@pytest.mark.parametrize(
+    "example_dir_name",
+    [
+        "openai_slim_minimal",
+        "openai_slim_parallel_translation",
+    ],
+)
+def test_env_example_leaves_slim_binary_path_empty(example_dir_name: str) -> None:
     env_example = (
         Path(__file__).resolve().parents[2]
         / "examples"
-        / "graphon_openai_slim"
+        / example_dir_name
         / ".env.example"
     )
     values = {

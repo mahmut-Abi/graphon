@@ -1,15 +1,8 @@
-# Graphon OpenAI Slim Example
+# OpenAI Slim Minimal Example
 
 This example runs a minimal Graphon workflow:
 
 `start -> llm -> output`
-
-It uses:
-
-- Graphon as the Python package import surface
-- `dify-plugin-daemon-slim` as the local model runtime bridge
-- the Dify OpenAI plugin package
-- the `gpt-5.4` model
 
 ## Files
 
@@ -22,7 +15,7 @@ It uses:
 1. Change into this directory:
 
 ```bash
-cd examples/graphon_openai_slim
+cd examples/openai_slim_minimal
 ```
 
 2. Copy the template:
@@ -56,6 +49,9 @@ python3 workflow.py "Explain graph sparsity in one sentence."
 - If your current interpreter is missing runtime dependencies but the repository
   `.venv` exists, `workflow.py` will re-exec itself with that local virtualenv
   interpreter automatically.
+- No `slim` executable is bundled in this example directory. Provide
+  `dify-plugin-daemon-slim` via `PATH` or set `SLIM_BINARY_PATH` in `.env` if
+  you keep it elsewhere.
 - Path-like variables in `.env` are resolved relative to this example
   directory, not relative to your shell's current working directory.
 - By default, `SLIM_PLUGIN_FOLDER` resolves to the repository-root

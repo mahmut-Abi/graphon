@@ -23,7 +23,7 @@ class ModelConfig(BaseModel):
 
 
 class ContextConfig(BaseModel):
-    enabled: bool
+    enabled: bool = False
     variable_selector: list[str] | None = None
 
 
@@ -72,7 +72,7 @@ class LLMNodeData(BaseNodeData):
     )
     prompt_config: PromptConfig = Field(default_factory=PromptConfig)
     memory: MemoryConfig | None = None
-    context: ContextConfig
+    context: ContextConfig = Field(default_factory=ContextConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     structured_output: Mapping[str, Any] | None = None
     # We used 'structured_output_enabled' in the past, but it's not a good name.
