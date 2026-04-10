@@ -46,51 +46,12 @@ make test
 `make dev` installs the project, syncs development dependencies, and sets up
 [`prek`](https://prek.j178.dev/) Git hooks.
 
-## Run the Example Workflows
+## Examples
 
-The repository includes two runnable OpenAI Slim examples, each in its own
-directory under `examples/`:
+Runnable examples live under [`examples/`](examples/).
 
-- [`examples/openai_slim_minimal`](examples/openai_slim_minimal):
-  `start -> llm -> output`
-- [`examples/openai_slim_parallel_translation`](examples/openai_slim_parallel_translation):
-  `start -> 3 llm -> end`
-
-To run the minimal example:
-
-```bash
-make dev
-source .venv/bin/activate
-cd examples/openai_slim_minimal
-cp .env.example .env
-python3 workflow.py "Explain Graphon in one short sentence."
-```
-
-To run the parallel translation example:
-
-```bash
-make dev
-source .venv/bin/activate
-cd examples/openai_slim_parallel_translation
-cp .env.example .env
-python3 workflow.py "Graph execution is a coordination problem."
-```
-
-Before running either example, fill in the required values in `.env`.
-
-The examples currently expect:
-
-- an `OPENAI_API_KEY`
-- a `SLIM_PLUGIN_ID`
-- a local `dify-plugin-daemon-slim` setup or equivalent Slim runtime
-
-No `slim` executable is bundled under `examples/`; provide it via `PATH` or
-set `SLIM_BINARY_PATH` in the example `.env` file if needed.
-
-For the exact environment variables and runtime notes, see:
-
-- [examples/openai_slim_minimal/README.md](examples/openai_slim_minimal/README.md)
-- [examples/openai_slim_parallel_translation/README.md](examples/openai_slim_parallel_translation/README.md)
+Each example is self-contained in its own subdirectory and includes its own
+setup instructions, environment template, and `workflow.py` entrypoint.
 
 ## How Graphon Fits Together
 
@@ -102,8 +63,8 @@ At a high level, Graphon usage looks like this:
 4. Run `GraphEngine` and consume emitted graph events.
 5. Read final outputs from runtime state.
 
-The bundled example follows exactly that path. The execution loop is centered
-around `GraphEngine.run()`:
+The examples under [`examples/`](examples/) follow exactly that path. The
+execution loop is centered around `GraphEngine.run()`:
 
 ```python
 engine = GraphEngine(
@@ -117,10 +78,8 @@ for event in engine.run():
     ...
 ```
 
-See
-[examples/openai_slim_minimal/workflow.py](examples/openai_slim_minimal/workflow.py)
-for the minimal example, including `SlimRuntime`, `SlimPreparedLLM`, graph
-construction, input seeding, and streamed output handling.
+See [`examples/`](examples/) for the current runnable workflows and their
+example-specific setup notes.
 
 ## Project Layout
 
@@ -140,10 +99,7 @@ construction, input seeding, and streamed output handling.
 ## Internal Docs
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): contributor workflow, CI, commit/PR rules
-- [examples/openai_slim_minimal/README.md](examples/openai_slim_minimal/README.md):
-  minimal runnable example setup
-- [examples/openai_slim_parallel_translation/README.md](examples/openai_slim_parallel_translation/README.md):
-  parallel translation example setup
+- [examples/](examples/): runnable examples and per-example setup notes
 - [src/graphon/model_runtime/README.md](src/graphon/model_runtime/README.md):
   model runtime overview
 - [src/graphon/graph_engine/layers/README.md](src/graphon/graph_engine/layers/README.md):
