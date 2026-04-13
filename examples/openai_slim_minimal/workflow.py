@@ -28,27 +28,25 @@ from examples import openai_slim_support
 openai_slim_support.prepare_example_imports(EXAMPLE_FILE)
 
 # ruff: noqa: E402
-from graphon.entities.graph_init_params import GraphInitParams
-from graphon.graph.graph import Graph
 from graphon.graph_engine.command_channels import InMemoryChannel
 from graphon.graph_engine.graph_engine import GraphEngine
 from graphon.graph_events.node import NodeRunStreamChunkEvent
 from graphon.model_runtime.entities.llm_entities import LLMMode
-from graphon.model_runtime.entities.message_entities import PromptMessageRole
 from graphon.model_runtime.slim import SlimPreparedLLM, SlimRuntime
-from graphon.nodes.answer.answer_node import AnswerNode
 from graphon.nodes.answer.entities import AnswerNodeData
-from graphon.nodes.llm import (
-    LLMNode,
-    LLMNodeChatModelMessage,
-    LLMNodeData,
-    ModelConfig,
-)
-from graphon.nodes.start import StartNode
+from graphon.nodes.llm import LLMNodeData, ModelConfig
 from graphon.nodes.start.entities import StartNodeData
 from graphon.runtime.graph_runtime_state import GraphRuntimeState
 from graphon.runtime.variable_pool import VariablePool
-from graphon.variables.input_entities import VariableEntity, VariableEntityType
+from graphon.workflow_builder import (
+    WorkflowBuilder,
+    WorkflowRuntime,
+    WorkflowSpec,
+    paragraph_input,
+    system,
+    template,
+    user,
+)
 
 STREAM_SELECTOR = ("llm", "text")
 
@@ -58,86 +56,38 @@ def build_runtime() -> tuple[SlimRuntime, str]:
     return runtime, provider
 
 
-def build_graph(
-    *,
-    provider: str,
-    prepared_llm: SlimPreparedLLM,
-    graph_init_params: GraphInitParams,
-    graph_runtime_state: GraphRuntimeState,
-) -> Graph:
-    start_node = StartNode(
-        node_id="start",
-        config={
-            "id": "start",
-            "data": StartNodeData(
-                title="Start",
-                variables=[
-                    VariableEntity(
-                        variable="query",
-                        label="Query",
-                        type=VariableEntityType.PARAGRAPH,
-                        required=True,
-                    ),
-                ],
-            ),
-        },
-        graph_init_params=graph_init_params,
-        graph_runtime_state=graph_runtime_state,
-    )
-
-    llm_node = LLMNode(
-        node_id="llm",
-        config={
-            "id": "llm",
-            "data": LLMNodeData(
-                title="LLM",
-                model=ModelConfig(
-                    provider=provider,
-                    name="gpt-5.4",
-                    mode=LLMMode.CHAT,
-                ),
-                prompt_template=[
-                    LLMNodeChatModelMessage(
-                        role=PromptMessageRole.SYSTEM,
-                        text="You are a concise assistant.",
-                    ),
-                    LLMNodeChatModelMessage(
-                        role=PromptMessageRole.USER,
-                        text="{{#start.query#}}",
-                    ),
-                ],
-            ),
-        },
-        graph_init_params=graph_init_params,
-        graph_runtime_state=graph_runtime_state,
-        model_instance=prepared_llm,
-        llm_file_saver=openai_slim_support.TextOnlyFileSaver(),
-        prompt_message_serializer=(
-            openai_slim_support.PassthroughPromptMessageSerializer()
+def build_workflow(*, provider: str) -> WorkflowSpec:
+    workflow = WorkflowBuilder()
+    start = workflow.root(
+        "start",
+        StartNodeData(
+            title="Start",
+            variables=[paragraph_input("query", required=True)],
         ),
     )
-
-    output_node = AnswerNode(
-        node_id="output",
-        config={
-            "id": "output",
-            "data": AnswerNodeData(
-                title="Output",
-                answer="{{#llm.text#}}",
+    llm = start.then(
+        "llm",
+        LLMNodeData(
+            title="LLM",
+            model=ModelConfig(
+                provider=provider,
+                name="gpt-5.4",
+                mode=LLMMode.CHAT,
             ),
-        },
-        graph_init_params=graph_init_params,
-        graph_runtime_state=graph_runtime_state,
+            prompt_template=[
+                system("You are a concise assistant."),
+                user(start.ref("query")),
+            ],
+        ),
     )
-
-    return (
-        Graph
-        .new()
-        .add_root(start_node)
-        .add_node(llm_node)
-        .add_node(output_node)
-        .build()
+    llm.then(
+        "output",
+        AnswerNodeData(
+            title="Output",
+            answer=template(llm.ref("text")).render(),
+        ),
     )
+    return workflow.build()
 
 
 def write_stream_chunk(event: object, *, stream_output: IO[str]) -> bool:
@@ -159,12 +109,6 @@ def _execute_workflow(
     openai_slim_support.load_default_env_file(EXAMPLE_DIR)
     runtime, provider = build_runtime()
     workflow_id = "example-start-llm-output"
-    graph_init_params = GraphInitParams(
-        workflow_id=workflow_id,
-        graph_config={"nodes": [], "edges": []},
-        run_context={},
-        call_depth=0,
-    )
     graph_runtime_state = GraphRuntimeState(
         variable_pool=VariablePool(),
         start_at=time.time(),
@@ -183,11 +127,12 @@ def _execute_workflow(
         },
         parameters={},
     )
-    graph = build_graph(
-        provider=provider,
-        prepared_llm=prepared_llm,
-        graph_init_params=graph_init_params,
-        graph_runtime_state=graph_runtime_state,
+    graph = build_workflow(provider=provider).materialize(
+        WorkflowRuntime(
+            workflow_id=workflow_id,
+            graph_runtime_state=graph_runtime_state,
+            prepared_llm=prepared_llm,
+        ),
     )
     engine = GraphEngine(
         workflow_id=workflow_id,

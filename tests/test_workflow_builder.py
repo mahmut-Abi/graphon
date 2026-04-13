@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 from typing import cast
 
-from graphon.entities.graph_init_params import GraphInitParams
 from graphon.model_runtime.entities.llm_entities import LLMMode
+from graphon.nodes.base.entities import OutputVariableType
 from graphon.nodes.end.end_node import EndNode
 from graphon.nodes.end.entities import EndNodeData
 from graphon.nodes.llm import LLMNodeData, ModelConfig
@@ -13,9 +13,14 @@ from graphon.nodes.start.entities import StartNodeData
 from graphon.runtime.graph_runtime_state import GraphRuntimeState
 from graphon.runtime.variable_pool import VariablePool
 from graphon.workflow_builder import (
+    NodeOutputRef,
     WorkflowBuilder,
+    WorkflowRuntime,
+    completion_prompt,
     paragraph_input,
     system,
+    template,
+    text_input,
     user,
 )
 
@@ -35,21 +40,11 @@ def test_llm_node_data_defaults_context_to_disabled() -> None:
 
 
 def test_workflow_builder_builds_parallel_translation_workflow() -> None:
-    graph_init_params = GraphInitParams(
-        workflow_id="parallel-translation",
-        graph_config={"nodes": [], "edges": []},
-        run_context={},
-        call_depth=0,
-    )
     graph_runtime_state = GraphRuntimeState(
         variable_pool=VariablePool(),
         start_at=time.time(),
     )
-    builder = WorkflowBuilder(
-        graph_init_params=graph_init_params,
-        graph_runtime_state=graph_runtime_state,
-        prepared_llm=cast(PreparedLLMProtocol, object()),
-    )
+    builder = WorkflowBuilder()
 
     start = builder.root(
         "start",
@@ -108,7 +103,14 @@ def test_workflow_builder_builds_parallel_translation_workflow() -> None:
     english.connect(output)
     japanese.connect(output)
 
-    graph = builder.build()
+    workflow = builder.build()
+    graph = workflow.materialize(
+        WorkflowRuntime(
+            workflow_id="parallel-translation",
+            graph_runtime_state=graph_runtime_state,
+            prepared_llm=cast(PreparedLLMProtocol, object()),
+        ),
+    )
 
     assert graph.root_node.id == "start"
     assert isinstance(graph.nodes["output"], EndNode)
@@ -132,3 +134,19 @@ def test_workflow_builder_builds_parallel_translation_workflow() -> None:
         ("translate_en", "text"),
         ("translate_ja", "text"),
     ]
+
+
+def test_workflow_builder_helpers_produce_typed_authoring_values() -> None:
+    ref = NodeOutputRef(node_id="llm", output_name="text")
+    prompt = completion_prompt("Answer in one sentence: ", ref)
+    binding = ref.output("answer", value_type=OutputVariableType.STRING)
+    text = text_input("question", required=True, max_length=512)
+
+    assert template("Result: ", ref).render() == "Result: {{#llm.text#}}"
+    assert prompt.text == "Answer in one sentence: {{#llm.text#}}"
+    assert binding.variable == "answer"
+    assert tuple(binding.value_selector) == ("llm", "text")
+    assert binding.value_type is OutputVariableType.STRING
+    assert text.variable == "question"
+    assert text.type.value == "text-input"
+    assert text.max_length == 512

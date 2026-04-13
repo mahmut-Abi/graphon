@@ -29,7 +29,6 @@ from examples import openai_slim_support
 openai_slim_support.prepare_example_imports(EXAMPLE_FILE)
 
 # ruff: noqa: E402
-from graphon.entities.graph_init_params import GraphInitParams
 from graphon.graph.graph import Graph
 from graphon.graph_engine.command_channels import InMemoryChannel
 from graphon.graph_engine.graph_engine import GraphEngine
@@ -41,7 +40,14 @@ from graphon.nodes.llm import LLMNodeData, ModelConfig
 from graphon.nodes.start.entities import StartNodeData
 from graphon.runtime.graph_runtime_state import GraphRuntimeState
 from graphon.runtime.variable_pool import VariablePool
-from graphon.workflow_builder import WorkflowBuilder, paragraph_input, system, user
+from graphon.workflow_builder import (
+    WorkflowBuilder,
+    WorkflowRuntime,
+    WorkflowSpec,
+    paragraph_input,
+    system,
+    user,
+)
 
 TARGET_LANGUAGES: tuple[tuple[str, str, str], ...] = (
     ("translate_zh", "Chinese", "chinese"),
@@ -90,14 +96,21 @@ def build_graph(
     *,
     provider: str,
     prepared_llm: SlimPreparedLLM,
-    graph_init_params: GraphInitParams,
+    workflow_id: str,
     graph_runtime_state: GraphRuntimeState,
 ) -> Graph:
-    workflow = WorkflowBuilder(
-        graph_init_params=graph_init_params,
-        graph_runtime_state=graph_runtime_state,
-        prepared_llm=prepared_llm,
+    workflow = build_workflow(provider=provider)
+    return workflow.materialize(
+        WorkflowRuntime(
+            workflow_id=workflow_id,
+            graph_runtime_state=graph_runtime_state,
+            prepared_llm=prepared_llm,
+        ),
     )
+
+
+def build_workflow(*, provider: str) -> WorkflowSpec:
+    workflow = WorkflowBuilder()
 
     start = workflow.root(
         "start",
@@ -170,12 +183,6 @@ def _execute_workflow(
     openai_slim_support.load_default_env_file(EXAMPLE_DIR)
     runtime, provider = openai_slim_support.build_runtime(example_dir=EXAMPLE_DIR)
     workflow_id = "parallel-translation-workflow"
-    graph_init_params = GraphInitParams(
-        workflow_id=workflow_id,
-        graph_config={"nodes": [], "edges": []},
-        run_context={},
-        call_depth=0,
-    )
     graph_runtime_state = GraphRuntimeState(
         variable_pool=VariablePool(),
         start_at=time.time(),
@@ -198,7 +205,7 @@ def _execute_workflow(
     graph = build_graph(
         provider=provider,
         prepared_llm=prepared_llm,
-        graph_init_params=graph_init_params,
+        workflow_id=workflow_id,
         graph_runtime_state=graph_runtime_state,
     )
     engine = GraphEngine(
