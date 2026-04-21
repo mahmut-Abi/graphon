@@ -295,7 +295,7 @@ class File(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_constructor_input(cls, value: Any) -> Any:
+    def _normalize_constructor_input(cls, value: Any) -> Any:
         if not isinstance(value, Mapping):
             return value
         return _normalize_file_input(value)
@@ -336,7 +336,7 @@ class File(BaseModel):
         }
 
     @model_validator(mode="after")
-    def validate_after(self) -> Self:
+    def _validate_after(self) -> Self:
         match self.transfer_method:
             case FileTransferMethod.REMOTE_URL:
                 if not self.remote_url:
