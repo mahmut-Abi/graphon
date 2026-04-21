@@ -461,6 +461,7 @@ class _GraphRuntimeBindings:
             raise ValueError(msg)
 
         self.graph = graph
+        suspension_state.apply_pending_graph_state(graph)
         _reconcile_graph_known_legacy_writable_variables(
             variable_pool=self._runtime_state.variable_pool,
             graph=graph,
@@ -480,8 +481,6 @@ class _GraphRuntimeBindings:
                 suspension_state.pending_response_coordinator_dump,
             )
             suspension_state.pending_response_coordinator_dump = None
-
-        suspension_state.apply_pending_graph_state(graph)
 
     def configure(
         self,
@@ -964,14 +963,14 @@ class GraphRuntimeState:  # noqa: PLR0904
             snapshot.response_coordinator_dump,
             self._suspension_state,
         )
+        self._suspension_state.apply_snapshot(snapshot)
+        self._suspension_state.apply_pending_graph_state(self._bindings.graph)
         if self._bindings.graph is not None:
             _reconcile_graph_known_legacy_writable_variables(
                 variable_pool=self.variable_pool,
                 graph=self._bindings.graph,
                 graph_execution=self._bindings.graph_execution,
             )
-        self._suspension_state.apply_snapshot(snapshot)
-        self._suspension_state.apply_pending_graph_state(self._bindings.graph)
 
 
 def _coerce_graph_state_map(payload: Any, key: str) -> dict[str, NodeState]:
@@ -1034,6 +1033,9 @@ def _reconcile_graph_known_legacy_writable_variables(
             )
         )
         if not isinstance(node_id, str):
+            continue
+
+        if getattr(node, "state", None) != NodeState.UNKNOWN:
             continue
 
         if getattr(node, "node_type", None) == BuiltinNodeTypes.LOOP:
