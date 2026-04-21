@@ -180,3 +180,44 @@ def test_invalid_constant_input_returns_failed_event() -> None:
     )
     assert failed_event.node_run_result.status == WorkflowNodeExecutionStatus.FAILED
     assert failed_event.node_run_result.error == "Invalid input value 123"
+
+
+def test_overwrite_read_only_variable_returns_failed_event() -> None:
+    target = StringVariable(
+        name="target",
+        value="before",
+        selector=["node_id", "target"],
+    )
+    source = StringVariable(
+        name="source",
+        value="after",
+        selector=["inputs", "source"],
+    )
+
+    variable_pool = build_variable_pool(
+        variables=[
+            (("node_id", target.name), target),
+            (("inputs", source.name), source),
+        ],
+    )
+    node = _build_node(
+        variable_pool=variable_pool,
+        items=[
+            VariableOperationItem(
+                variable_selector=["node_id", target.name],
+                input_type=InputType.VARIABLE,
+                operation=Operation.OVER_WRITE,
+                value=["inputs", source.name],
+            ),
+        ],
+    )
+
+    events = list(node.run())
+
+    failed_event = next(
+        event for event in events if isinstance(event, NodeRunFailedEvent)
+    )
+    assert (
+        failed_event.node_run_result.error
+        == "Variable ['node_id', 'target'] is read-only"
+    )
