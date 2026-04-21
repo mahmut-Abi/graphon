@@ -128,7 +128,7 @@ class LLMNode(Node[LLMNodeData]):
     def __init__(
         self,
         node_id: str,
-        config: LLMNodeData,
+        data: LLMNodeData,
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
@@ -145,7 +145,7 @@ class LLMNode(Node[LLMNodeData]):
     ) -> None:
         super().__init__(
             node_id=node_id,
-            config=config,
+            data=data,
             graph_init_params=graph_init_params,
             graph_runtime_state=graph_runtime_state,
         )
@@ -253,6 +253,9 @@ class LLMNode(Node[LLMNodeData]):
             collected_context=collected_context,
         )
         model_instance = self._prepare_model_instance()
+        node_inputs.update(
+            llm_utils.build_model_identity_inputs(model_instance=model_instance),
+        )
         prompt_messages, stop = LLMNode.fetch_prompt_messages(
             sys_query=self._resolve_memory_query(),
             sys_files=files,
@@ -377,6 +380,9 @@ class LLMNode(Node[LLMNodeData]):
                 )
             break
 
+        node_inputs.update(
+            llm_utils.build_model_identity_inputs(model_instance=self._model_instance),
+        )
         process_data.update(
             self._build_process_data(
                 prompt_messages=prompt_messages,

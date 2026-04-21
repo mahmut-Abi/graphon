@@ -74,7 +74,7 @@ def _build_question_classifier_node(
 ) -> QuestionClassifierNode:
     return QuestionClassifierNode(
         node_id="classifier",
-        config=node_data,
+        data=node_data,
         graph_init_params=build_graph_init_params(
             graph_config={"nodes": [], "edges": []},
         ),
@@ -136,7 +136,7 @@ def test_question_classifier_constructor_accepts_dependency_bundle(
     )
     node = QuestionClassifierNode(
         node_id="classifier",
-        config=node_data,
+        data=node_data,
         graph_init_params=build_graph_init_params(
             graph_config={"nodes": [], "edges": []},
         ),
@@ -206,7 +206,7 @@ def test_question_classifier_constructor_rejects_mixed_dependency_inputs() -> No
     with pytest.raises(TypeError, match="runtime collaborators twice"):
         QuestionClassifierNode(
             node_id="classifier",
-            config=node_data,
+            data=node_data,
             graph_init_params=build_graph_init_params(
                 graph_config={"nodes": [], "edges": []},
             ),
@@ -300,6 +300,8 @@ def test_question_classifier_run_returns_custom_class_label(
     assert result.outputs["class_name"] == "Questions about refunds"
     assert result.outputs["class_label"] == "Refund desk"
     assert result.outputs["class_id"] == "refund"
+    assert result.inputs["model_provider"] == "openai"
+    assert result.inputs["model_name"] == "gpt-4o"
 
 
 def test_question_classifier_run_falls_back_to_canonical_class_label(

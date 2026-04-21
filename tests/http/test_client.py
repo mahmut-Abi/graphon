@@ -2,7 +2,6 @@ import inspect
 import time
 from collections.abc import Callable, Generator, Mapping
 from http import HTTPStatus
-from importlib import import_module
 from typing import Any
 
 import httpx
@@ -25,6 +24,7 @@ from graphon.nodes.document_extractor.node import DocumentExtractorNode
 from graphon.nodes.http_request import (
     HttpRequestNode,
     HttpRequestNodeData,
+    HttpRequestNodeDependencies,
     build_http_request_config,
 )
 from graphon.nodes.http_request.entities import (
@@ -39,9 +39,6 @@ from graphon.nodes.question_classifier.question_classifier_node import (
 from graphon.runtime.graph_runtime_state import GraphRuntimeState
 
 from ..helpers import build_graph_init_params, build_variable_pool
-
-_http_request_node_module = import_module("graphon.nodes.http_request.node")
-_internal_dependencies_name = "_HttpRequestNodeDependencies"
 
 
 class _ToolFileManager:
@@ -126,15 +123,11 @@ def _restore_default_http_client() -> Generator[None, None, None]:
     set_http_client(default_http_client)
 
 
-def _build_internal_dependencies(
+def _build_dependencies(
     *,
     http_client: HttpClientProtocol | None = None,
-) -> Any:
-    dependencies_cls = getattr(
-        _http_request_node_module,
-        _internal_dependencies_name,
-    )
-    return dependencies_cls(
+) -> HttpRequestNodeDependencies:
+    return HttpRequestNodeDependencies(
         tool_file_manager_factory=_ToolFileManager,
         file_manager=_FileManager(),
         file_reference_factory=_FileReferenceFactory(),
@@ -238,10 +231,10 @@ def test_set_http_client_updates_process_default() -> None:
     assert get_http_client() is default_http_client
 
 
-def test_http_request_node_accepts_internal_dependency_bundle() -> None:
+def test_http_request_node_accepts_public_dependency_bundle() -> None:
     node = HttpRequestNode(
         node_id="http",
-        config=HttpRequestNodeData(
+        data=HttpRequestNodeData(
             title="HTTP Request",
             method="get",
             url="https://example.com",
@@ -255,7 +248,7 @@ def test_http_request_node_accepts_internal_dependency_bundle() -> None:
         ),
         graph_runtime_state=_build_runtime_state(),
         http_request_config=build_http_request_config(),
-        dependencies=_build_internal_dependencies(),
+        dependencies=_build_dependencies(),
     )
 
     assert node.http_client is get_http_client()
@@ -268,7 +261,7 @@ def test_http_request_node_rejects_mixed_dependency_inputs() -> None:
     ):
         HttpRequestNode(
             node_id="http",
-            config=HttpRequestNodeData(
+            data=HttpRequestNodeData(
                 title="HTTP Request",
                 method="get",
                 url="https://example.com",
@@ -282,7 +275,7 @@ def test_http_request_node_rejects_mixed_dependency_inputs() -> None:
             ),
             graph_runtime_state=_build_runtime_state(),
             http_request_config=build_http_request_config(),
-            dependencies=_build_internal_dependencies(),
+            dependencies=_build_dependencies(),
             file_manager=_FileManager(),
         )
 
@@ -293,7 +286,7 @@ def test_http_request_node_uses_configured_default_http_client() -> None:
 
     node = HttpRequestNode(
         node_id="http",
-        config=HttpRequestNodeData(
+        data=HttpRequestNodeData(
             title="HTTP Request",
             method="get",
             url="https://example.com",
@@ -318,7 +311,7 @@ def test_http_request_node_uses_configured_default_http_client() -> None:
 def test_document_extractor_node_uses_default_http_client_when_not_injected() -> None:
     node = DocumentExtractorNode(
         node_id="extractor",
-        config=DocumentExtractorNodeData(
+        data=DocumentExtractorNodeData(
             title="Document Extractor",
             variable_selector=["inputs", "file"],
         ),
@@ -337,7 +330,7 @@ def test_document_extractor_node_uses_configured_default_http_client() -> None:
 
     node = DocumentExtractorNode(
         node_id="extractor",
-        config=DocumentExtractorNodeData(
+        data=DocumentExtractorNodeData(
             title="Document Extractor",
             variable_selector=["inputs", "file"],
         ),
@@ -388,3 +381,10 @@ def test_http_client_injection_is_optional(
     parameter = inspect.signature(callable_obj).parameters[parameter_name]
 
     assert parameter.default is None
+
+
+def test_http_request_node_signature_exposes_public_dependencies() -> None:
+    parameters = inspect.signature(HttpRequestNode.__init__).parameters
+
+    assert "dependencies" in parameters
+    assert parameters["dependencies"].default is None

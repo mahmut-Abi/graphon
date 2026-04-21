@@ -105,7 +105,7 @@ class QuestionClassifierNode(Node[QuestionClassifierNodeData]):
     def __init__(
         self,
         node_id: str,
-        config: QuestionClassifierNodeData,
+        data: QuestionClassifierNodeData,
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
@@ -121,7 +121,7 @@ class QuestionClassifierNode(Node[QuestionClassifierNodeData]):
     ) -> None:
         super().__init__(
             node_id=node_id,
-            config=config,
+            data=data,
             graph_init_params=graph_init_params,
             graph_runtime_state=graph_runtime_state,
         )
@@ -275,6 +275,10 @@ class QuestionClassifierNode(Node[QuestionClassifierNodeData]):
             model_instance=model_instance,
             files=files,
         )
+        inputs = {
+            "query": query,
+            **llm_utils.build_model_identity_inputs(model_instance=model_instance),
+        }
         rendered_classes = [
             class_.model_copy(
                 update={"name": variable_pool.convert_template(class_.name).text},
@@ -282,7 +286,7 @@ class QuestionClassifierNode(Node[QuestionClassifierNodeData]):
             for class_ in node_data.classes
         ]
         return _QuestionClassifierRunContext(
-            inputs={"query": query},
+            inputs=inputs,
             model_instance=model_instance,
             prompt_messages=prompt_messages,
             stop=stop,

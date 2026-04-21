@@ -147,7 +147,7 @@ class ParameterExtractorNode(Node[ParameterExtractorNodeData]):
     def __init__(
         self,
         node_id: str,
-        config: ParameterExtractorNodeData,
+        data: ParameterExtractorNodeData,
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
@@ -163,7 +163,7 @@ class ParameterExtractorNode(Node[ParameterExtractorNodeData]):
     def __init__(
         self,
         node_id: str,
-        config: ParameterExtractorNodeData,
+        data: ParameterExtractorNodeData,
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
@@ -179,7 +179,7 @@ class ParameterExtractorNode(Node[ParameterExtractorNodeData]):
     def __init__(
         self,
         node_id: str,
-        config: ParameterExtractorNodeData,
+        data: ParameterExtractorNodeData,
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
@@ -192,7 +192,7 @@ class ParameterExtractorNode(Node[ParameterExtractorNodeData]):
     ) -> None:
         super().__init__(
             node_id=node_id,
-            config=config,
+            data=data,
             graph_init_params=graph_init_params,
             graph_runtime_state=graph_runtime_state,
         )
@@ -384,6 +384,7 @@ class ParameterExtractorNode(Node[ParameterExtractorNodeData]):
             "files": [f.to_dict() for f in files],
             "parameters": jsonable_encoder(node_data.parameters),
             "instruction": jsonable_encoder(node_data.instruction),
+            **llm_utils.build_model_identity_inputs(model_instance=model_instance),
         }
         process_data = {
             "model_mode": node_data.model.mode,
