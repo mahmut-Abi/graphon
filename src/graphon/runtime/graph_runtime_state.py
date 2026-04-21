@@ -464,6 +464,7 @@ class _GraphRuntimeBindings:
         _reconcile_graph_known_legacy_writable_variables(
             variable_pool=self._runtime_state.variable_pool,
             graph=graph,
+            graph_execution=self.graph_execution,
         )
 
         if self.response_coordinator is None:
@@ -954,11 +955,6 @@ class GraphRuntimeState:  # noqa: PLR0904
 
     def _apply_snapshot(self, snapshot: _GraphRuntimeStateSnapshot) -> None:
         self._execution_data.apply_snapshot(snapshot)
-        if self._bindings.graph is not None:
-            _reconcile_graph_known_legacy_writable_variables(
-                variable_pool=self.variable_pool,
-                graph=self._bindings.graph,
-            )
         self._bindings.restore_ready_queue(snapshot.ready_queue_dump)
         self._bindings.restore_graph_execution(
             snapshot.graph_execution_dump,
@@ -968,6 +964,12 @@ class GraphRuntimeState:  # noqa: PLR0904
             snapshot.response_coordinator_dump,
             self._suspension_state,
         )
+        if self._bindings.graph is not None:
+            _reconcile_graph_known_legacy_writable_variables(
+                variable_pool=self.variable_pool,
+                graph=self._bindings.graph,
+                graph_execution=self._bindings.graph_execution,
+            )
         self._suspension_state.apply_snapshot(snapshot)
         self._suspension_state.apply_pending_graph_state(self._bindings.graph)
 
@@ -1013,7 +1015,11 @@ def _reconcile_graph_known_legacy_writable_variables(
     *,
     variable_pool: VariablePool,
     graph: GraphProtocol | Graph | None,
+    graph_execution: GraphExecutionProtocol | None,
 ) -> None:
+    if graph_execution is not None and graph_execution.completed:
+        return
+
     if graph is None or not isinstance(graph.nodes, Mapping):
         return
 
