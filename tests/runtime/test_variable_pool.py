@@ -204,7 +204,9 @@ class TestVariablePoolGetAndNestedAttribute:
         assert variable is not None
         assert variable.writable is True
 
-    def test_from_bootstrap_marks_variable_writability(self) -> None:
+    def test_from_bootstrap_marks_conversation_writable_and_system_read_only(
+        self,
+    ) -> None:
         pool = VariablePool.from_bootstrap(
             system_variables=[StringVariable(name="system_name", value="sys-value")],
             conversation_variables=[
