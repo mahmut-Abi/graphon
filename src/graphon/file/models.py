@@ -3,9 +3,9 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from graphon.model_runtime.entities.message_entities import ImagePromptMessageContent
 
@@ -14,6 +14,17 @@ from .constants import FILE_MODEL_IDENTITY
 from .enums import FileTransferMethod, FileType
 
 _FILE_REFERENCE_PREFIX = "dify-file-ref:"
+_REFERENCE_TRANSFER_METHODS = frozenset((
+    FileTransferMethod.LOCAL_FILE,
+    FileTransferMethod.TOOL_FILE,
+    FileTransferMethod.DATASOURCE_FILE,
+))
+_LEGACY_REFERENCE_FIELDS = (
+    "related_id",
+    "tool_file_id",
+    "upload_file_id",
+    "datasource_file_id",
+)
 
 
 def sign_tool_file(
@@ -77,6 +88,46 @@ def _parse_reference(reference: str | None) -> tuple[str | None, str | None]:
     return record_id, storage_key
 
 
+def _pick_legacy_reference(data: Mapping[str, Any]) -> str | None:
+    for field_name in _LEGACY_REFERENCE_FIELDS:
+        value = data.get(field_name)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _normalize_file_input(data: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(data)
+
+    file_id = normalized.pop("file_id", None)
+    if "id" not in normalized and file_id is not None:
+        normalized["id"] = file_id
+
+    file_type = normalized.pop("file_type", None)
+    if "type" not in normalized and file_type is not None:
+        normalized["type"] = file_type
+
+    normalized.pop("tenant_id", None)
+    normalized.pop("url", None)
+
+    reference = normalized.get("reference")
+    if reference is None:
+        legacy_reference = _pick_legacy_reference(normalized)
+        if legacy_reference is not None:
+            normalized["reference"] = legacy_reference
+
+    for field_name in _LEGACY_REFERENCE_FIELDS:
+        normalized.pop(field_name, None)
+
+    if normalized.get("dify_model_identity") is None:
+        normalized["dify_model_identity"] = FILE_MODEL_IDENTITY
+
+    storage_key_hint = normalized.pop("storage_key", None)
+    _, parsed_storage_key = _parse_reference(normalized.get("reference"))
+    normalized["storage_key_hint"] = storage_key_hint or parsed_storage_key
+    return normalized
+
+
 class File(BaseModel):
     """Graph-owned file reference.
 
@@ -106,15 +157,89 @@ class File(BaseModel):
     )
     mime_type: str | None = None
     size: int = -1
-    _storage_key: str
+    storage_key_hint: str | None = Field(default=None, exclude=True, repr=False)
+    _storage_key: str = PrivateAttr(default="")
 
-    def __init__(
-        self,
+    def __init__(self, /, **data: Any) -> None:
+        super().__init__(**data)
+
+    @classmethod
+    def from_reference(
+        cls,
         *,
-        file_id: str | None = None,
-        tenant_id: str | None = None,
         file_type: FileType,
         transfer_method: FileTransferMethod,
+        reference: str | None = None,
+        record_id: str | None = None,
+        file_id: str | None = None,
+        filename: str | None = None,
+        extension: str | None = None,
+        mime_type: str | None = None,
+        size: int = -1,
+        storage_key: str | None = None,
+        dify_model_identity: str = FILE_MODEL_IDENTITY,
+    ) -> Self:
+        if transfer_method not in _REFERENCE_TRANSFER_METHODS:
+            msg = (
+                "File.from_reference() only supports storage-backed transfer "
+                "methods; use File.from_remote_url() for remote files"
+            )
+            raise ValueError(msg)
+
+        normalized_reference = cls._resolve_reference_input(
+            reference=reference,
+            record_id=record_id,
+        )
+        return cls.model_validate(
+            {
+                "id": file_id,
+                "type": file_type,
+                "transfer_method": transfer_method,
+                "reference": normalized_reference,
+                "filename": filename,
+                "extension": extension,
+                "mime_type": mime_type,
+                "size": size,
+                "storage_key": storage_key,
+                "dify_model_identity": dify_model_identity,
+            },
+        )
+
+    @classmethod
+    def from_remote_url(
+        cls,
+        *,
+        file_type: FileType,
+        url: str,
+        file_id: str | None = None,
+        filename: str | None = None,
+        extension: str | None = None,
+        mime_type: str | None = None,
+        size: int = -1,
+        dify_model_identity: str = FILE_MODEL_IDENTITY,
+    ) -> Self:
+        return cls.model_validate(
+            {
+                "id": file_id,
+                "type": file_type,
+                "transfer_method": FileTransferMethod.REMOTE_URL,
+                "remote_url": url,
+                "filename": filename,
+                "extension": extension,
+                "mime_type": mime_type,
+                "size": size,
+                "dify_model_identity": dify_model_identity,
+            },
+        )
+
+    @classmethod
+    def from_legacy(
+        cls,
+        *,
+        file_type: FileType,
+        transfer_method: FileTransferMethod,
+        file_id: str | None = None,
+        tenant_id: str | None = None,
         remote_url: str | None = None,
         reference: str | None = None,
         related_id: str | None = None,
@@ -125,36 +250,58 @@ class File(BaseModel):
         storage_key: str | None = None,
         dify_model_identity: str | None = FILE_MODEL_IDENTITY,
         url: str | None = None,
-        # Legacy compatibility fields - explicitly accept known extra fields
         tool_file_id: str | None = None,
         upload_file_id: str | None = None,
         datasource_file_id: str | None = None,
-    ) -> None:
-        legacy_record_id = (
-            related_id or tool_file_id or upload_file_id or datasource_file_id
+    ) -> Self:
+        return cls.model_validate(
+            {
+                "file_id": file_id,
+                "tenant_id": tenant_id,
+                "file_type": file_type,
+                "transfer_method": transfer_method,
+                "remote_url": remote_url,
+                "reference": reference,
+                "related_id": related_id,
+                "filename": filename,
+                "extension": extension,
+                "mime_type": mime_type,
+                "size": size,
+                "storage_key": storage_key,
+                "dify_model_identity": dify_model_identity,
+                "url": url,
+                "tool_file_id": tool_file_id,
+                "upload_file_id": upload_file_id,
+                "datasource_file_id": datasource_file_id,
+            },
         )
-        normalized_reference = reference
-        if normalized_reference is None and legacy_record_id is not None:
-            normalized_reference = str(legacy_record_id)
-        _, parsed_storage_key = _parse_reference(normalized_reference)
 
-        super().__init__(
-            id=file_id,
-            type=file_type,
-            transfer_method=transfer_method,
-            remote_url=remote_url,
-            reference=normalized_reference,
-            filename=filename,
-            extension=extension,
-            mime_type=mime_type,
-            size=size,
-            dify_model_identity=dify_model_identity,
-            url=url,
-        )
-        # Accept legacy constructor fields without promoting them
-        # back into the graph model.
-        _ = tenant_id
-        self._storage_key = storage_key or parsed_storage_key or ""
+    @staticmethod
+    def _resolve_reference_input(
+        *,
+        reference: str | None,
+        record_id: str | None,
+    ) -> str | None:
+        if reference is None:
+            return record_id
+        if record_id is None:
+            return reference
+
+        parsed_record_id, _ = _parse_reference(reference)
+        if parsed_record_id != record_id:
+            msg = "reference and record_id describe different files"
+            raise ValueError(msg)
+        return reference
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_constructor_input(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        return _normalize_file_input(value)
+
+    def model_post_init(self, __context: Any, /) -> None:
+        self._storage_key = self.storage_key_hint or ""
 
     def to_dict(self) -> Mapping[str, str | int | None]:
         data = self.model_dump(mode="json")
@@ -189,7 +336,7 @@ class File(BaseModel):
         }
 
     @model_validator(mode="after")
-    def validate_after(self) -> File:
+    def validate_after(self) -> Self:
         match self.transfer_method:
             case FileTransferMethod.REMOTE_URL:
                 if not self.remote_url:
