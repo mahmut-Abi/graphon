@@ -23,7 +23,7 @@ def test_loop_initializes_writable_loop_variables() -> None:
             graph_config={"nodes": [], "edges": []}
         ),
         graph_runtime_state=runtime_state,
-        config=LoopNodeData(
+        data=LoopNodeData(
             title="Loop",
             start_node_id="loop-start",
             loop_count=1,
@@ -58,7 +58,7 @@ def test_iteration_child_pool_marks_item_and_index_writable() -> None:
             graph_config={"nodes": [], "edges": []}
         ),
         graph_runtime_state=runtime_state,
-        config=IterationNodeData(
+        data=IterationNodeData(
             title="Iteration",
             start_node_id="iteration-start",
             iterator_selector=["source", "items"],
