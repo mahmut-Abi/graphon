@@ -1016,13 +1016,12 @@ def _reconcile_graph_known_legacy_writable_variables(
     graph: GraphProtocol | Graph | None,
     graph_execution: GraphExecutionProtocol | None,
 ) -> None:
-    if graph_execution is not None and (
-        graph_execution.completed or graph_execution.aborted
-    ):
-        return
-
     if graph is None or not isinstance(graph.nodes, Mapping):
         return
+
+    terminal_execution = graph_execution is not None and (
+        graph_execution.completed or graph_execution.aborted
+    )
 
     for mapped_node_id, node in graph.nodes.items():
         node_id = (
@@ -1037,7 +1036,8 @@ def _reconcile_graph_known_legacy_writable_variables(
         if not isinstance(node_id, str):
             continue
 
-        if getattr(node, "state", None) != NodeState.UNKNOWN:
+        writable = not terminal_execution
+        if writable and getattr(node, "state", None) != NodeState.UNKNOWN:
             continue
 
         if getattr(node, "node_type", None) == BuiltinNodeTypes.LOOP:
@@ -1046,9 +1046,9 @@ def _reconcile_graph_known_legacy_writable_variables(
             for loop_variable in loop_variables:
                 label = getattr(loop_variable, "label", None)
                 if isinstance(label, str):
-                    variable_pool.set_writable((node_id, label), writable=True)
+                    variable_pool.set_writable((node_id, label), writable=writable)
             continue
 
         if getattr(node, "node_type", None) == BuiltinNodeTypes.ITERATION:
-            variable_pool.set_writable((node_id, "index"), writable=True)
-            variable_pool.set_writable((node_id, "item"), writable=True)
+            variable_pool.set_writable((node_id, "index"), writable=writable)
+            variable_pool.set_writable((node_id, "item"), writable=writable)
