@@ -187,6 +187,10 @@ def test_overwrite_read_only_variable_fails() -> None:
     failed_event = next(
         event for event in events if isinstance(event, NodeRunFailedEvent)
     )
+    target_variable = variable_pool.get_variable(["node_id", assigned_variable.name])
+    assert not any(isinstance(event, NodeRunVariableUpdatedEvent) for event in events)
+    assert target_variable is not None
+    assert target_variable.value == "the first value"
     assert (
         failed_event.node_run_result.error
         == "Variable ['node_id', 'target'] is read-only"
