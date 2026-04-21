@@ -142,6 +142,13 @@ construction, input seeding, and streamed output handling.
 Contributor setup, tooling details, CLA notes, and commit/PR conventions live
 in [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Variable Mutability
+
+Graphon variables are readable by default, but only variables marked writable may
+be mutated by `VariableAssigner`. Built-in bootstrap conversation variables and
+container working variables are writable; ordinary node outputs remain read-only
+unless a caller explicitly creates them as writable.
+
 CI currently validates pull request titles, runs `make check`, and runs
 `make test` on Python 3.12 and 3.13. Python 3.14 is currently excluded because
 `unstructured` does not yet support it.
