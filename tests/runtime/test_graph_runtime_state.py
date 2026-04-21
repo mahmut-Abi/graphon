@@ -1,9 +1,12 @@
 import json
 from time import time
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from graphon.enums import BuiltinNodeTypes, NodeState
 from graphon.graph_engine.domain.graph_execution import GraphExecution
 from graphon.graph_engine.ready_queue.in_memory import InMemoryReadyQueue
 from graphon.model_runtime.entities.llm_entities import LLMUsage
@@ -25,6 +28,24 @@ class StubCoordinator:
     def loads(self, data: str) -> None:
         payload = json.loads(data)
         self.state = payload["state"]
+
+
+def _remove_writable_flags(snapshot: dict[str, Any]) -> dict[str, Any]:
+    variable_pool = snapshot.get("variable_pool")
+    if not isinstance(variable_pool, dict):
+        return snapshot
+
+    variable_dictionary = variable_pool.get("variable_dictionary")
+    if not isinstance(variable_dictionary, dict):
+        return snapshot
+
+    for node_variables in variable_dictionary.values():
+        if not isinstance(node_variables, dict):
+            continue
+        for variable_payload in node_variables.values():
+            if isinstance(variable_payload, dict):
+                variable_payload.pop("writable", None)
+    return snapshot
 
 
 class TestGraphRuntimeState:
@@ -328,3 +349,124 @@ class TestGraphRuntimeState:
         ))
         assert restored_value is not None
         assert restored_value.value == "after"
+
+    def test_legacy_snapshot_restore_keeps_conversation_variables_writable(
+        self,
+    ) -> None:
+        variable_pool = VariablePool.from_bootstrap(
+            conversation_variables=[
+                StringVariable(name="session_name", value="before"),
+            ],
+        )
+        state = GraphRuntimeState(variable_pool=variable_pool, start_at=time())
+        legacy_snapshot = _remove_writable_flags(json.loads(state.dumps()))
+
+        restored = GraphRuntimeState.from_snapshot(legacy_snapshot)
+
+        restored_variable = restored.variable_pool.get_variable((
+            CONVERSATION_VARIABLE_NODE_ID,
+            "session_name",
+        ))
+        assert restored_variable is not None
+        assert restored_variable.writable is True
+
+    def test_attach_graph_recovers_legacy_loop_and_iteration_working_mutability(
+        self,
+    ) -> None:
+        variable_pool = VariablePool.empty()
+        variable_pool.add(("loop-node", "counter"), 1, writable=True)
+        variable_pool.add(("iteration-node", "index"), 2, writable=True)
+        variable_pool.add(("iteration-node", "item"), "value", writable=True)
+        variable_pool.add(("plain-node", "result"), "frozen")
+
+        state = GraphRuntimeState(variable_pool=variable_pool, start_at=time())
+        legacy_snapshot = _remove_writable_flags(json.loads(state.dumps()))
+        restored = GraphRuntimeState.from_snapshot(legacy_snapshot)
+
+        loop_variable = restored.variable_pool.get_variable(("loop-node", "counter"))
+        iteration_index = restored.variable_pool.get_variable((
+            "iteration-node",
+            "index",
+        ))
+        iteration_item = restored.variable_pool.get_variable((
+            "iteration-node",
+            "item",
+        ))
+        plain_variable = restored.variable_pool.get_variable(("plain-node", "result"))
+        assert loop_variable is not None
+        assert iteration_index is not None
+        assert iteration_item is not None
+        assert plain_variable is not None
+        assert loop_variable.writable is False
+        assert iteration_index.writable is False
+        assert iteration_item.writable is False
+        assert plain_variable.writable is False
+
+        graph = SimpleNamespace(
+            nodes={
+                "loop-node": SimpleNamespace(
+                    id="loop-node",
+                    state=NodeState.UNKNOWN,
+                    node_type=BuiltinNodeTypes.LOOP,
+                    execution_type=MagicMock(),
+                    node_data=SimpleNamespace(
+                        loop_variables=[SimpleNamespace(label="counter")],
+                    ),
+                ),
+                "iteration-node": SimpleNamespace(
+                    id="iteration-node",
+                    state=NodeState.UNKNOWN,
+                    node_type=BuiltinNodeTypes.ITERATION,
+                    execution_type=MagicMock(),
+                    node_data=SimpleNamespace(),
+                ),
+                "plain-node": SimpleNamespace(
+                    id="plain-node",
+                    state=NodeState.UNKNOWN,
+                    node_type=BuiltinNodeTypes.CODE,
+                    execution_type=MagicMock(),
+                    node_data=SimpleNamespace(),
+                ),
+            },
+            edges={},
+            root_node=SimpleNamespace(
+                id="loop-node",
+                state=NodeState.UNKNOWN,
+                node_type=BuiltinNodeTypes.LOOP,
+                execution_type=MagicMock(),
+            ),
+            get_outgoing_edges=MagicMock(return_value=[]),
+        )
+
+        with patch.object(
+            GraphRuntimeState,
+            "_build_response_coordinator",
+            return_value=StubCoordinator(),
+            autospec=True,
+        ):
+            restored.attach_graph(cast(Any, graph))
+
+        restored_loop_variable = restored.variable_pool.get_variable((
+            "loop-node",
+            "counter",
+        ))
+        restored_iteration_index = restored.variable_pool.get_variable((
+            "iteration-node",
+            "index",
+        ))
+        restored_iteration_item = restored.variable_pool.get_variable((
+            "iteration-node",
+            "item",
+        ))
+        restored_plain_variable = restored.variable_pool.get_variable((
+            "plain-node",
+            "result",
+        ))
+        assert restored_loop_variable is not None
+        assert restored_iteration_index is not None
+        assert restored_iteration_item is not None
+        assert restored_plain_variable is not None
+        assert restored_loop_variable.writable is True
+        assert restored_iteration_index.writable is True
+        assert restored_iteration_item.writable is True
+        assert restored_plain_variable.writable is False

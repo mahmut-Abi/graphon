@@ -204,23 +204,49 @@ class VariablePool(BaseModel):
             )
             raise ValueError(msg)
 
+        resolved_writable = self._resolve_writable_for_add(selector, writable)
+
         match value:
             case Segment():
                 variable = segment_to_variable(
                     segment=value,
                     selector=selector,
-                    writable=writable,
+                    writable=resolved_writable,
                 )
             case _:
                 segment = build_segment(value)
                 variable = segment_to_variable(
                     segment=segment,
                     selector=selector,
-                    writable=writable,
+                    writable=resolved_writable,
                 )
 
         node_id, name = self._selector_to_keys(selector)
         self.variable_dictionary[node_id][name] = variable
+
+    def _resolve_writable_for_add(
+        self,
+        selector: Sequence[str],
+        writable: bool | None,
+    ) -> bool | None:
+        if writable is not None:
+            return writable
+
+        existing_variable = self.get_variable(selector)
+        if existing_variable is None:
+            return None
+        return existing_variable.writable
+
+    def set_writable(self, selector: Sequence[str], /, *, writable: bool) -> None:
+        """Update the stored writable flag for an existing top-level variable."""
+        variable = self.get_variable(selector)
+        if variable is None or variable.writable is writable:
+            return
+
+        node_id, name = self._selector_to_keys(selector)
+        self.variable_dictionary[node_id][name] = variable.model_copy(
+            update={"writable": writable},
+        )
 
     @classmethod
     def _selector_to_keys(cls, selector: Sequence[str]) -> tuple[str, str]:

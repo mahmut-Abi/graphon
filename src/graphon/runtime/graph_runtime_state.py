@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from pydantic import BaseModel, Field
 from pydantic_core import to_jsonable_python
 
-from graphon.enums import NodeExecutionType, NodeState, NodeType
+from graphon.enums import BuiltinNodeTypes, NodeExecutionType, NodeState, NodeType
 from graphon.model_runtime.entities.llm_entities import LLMUsage
 from graphon.runtime.variable_pool import VariablePool
 
@@ -461,6 +461,10 @@ class _GraphRuntimeBindings:
             raise ValueError(msg)
 
         self.graph = graph
+        _reconcile_graph_known_legacy_writable_variables(
+            variable_pool=self._runtime_state.variable_pool,
+            graph=graph,
+        )
 
         if self.response_coordinator is None:
             self.response_coordinator = self._runtime_state.create_response_coordinator(
@@ -920,7 +924,9 @@ class GraphRuntimeState:  # noqa: PLR0904
         variable_pool_payload = payload.get("variable_pool")
         has_variable_pool = variable_pool_payload is not None
         variable_pool = (
-            VariablePool.model_validate(variable_pool_payload)
+            VariablePool.model_validate(
+                _migrate_legacy_variable_pool_payload(variable_pool_payload),
+            )
             if has_variable_pool
             else VariablePool()
         )
@@ -948,6 +954,11 @@ class GraphRuntimeState:  # noqa: PLR0904
 
     def _apply_snapshot(self, snapshot: _GraphRuntimeStateSnapshot) -> None:
         self._execution_data.apply_snapshot(snapshot)
+        if self._bindings.graph is not None:
+            _reconcile_graph_known_legacy_writable_variables(
+                variable_pool=self.variable_pool,
+                graph=self._bindings.graph,
+            )
         self._bindings.restore_ready_queue(snapshot.ready_queue_dump)
         self._bindings.restore_graph_execution(
             snapshot.graph_execution_dump,
@@ -976,3 +987,58 @@ def _coerce_graph_state_map(payload: Any, key: str) -> dict[str, NodeState]:
         except ValueError:
             continue
     return result
+
+
+def _migrate_legacy_variable_pool_payload(payload: Any) -> Any:
+    if not isinstance(payload, Mapping):
+        return payload
+
+    migrated_payload = deepcopy(payload)
+    variable_dictionary = migrated_payload.get("variable_dictionary")
+    if not isinstance(variable_dictionary, dict):
+        return migrated_payload
+
+    conversation_variables = variable_dictionary.get("conversation")
+    if not isinstance(conversation_variables, dict):
+        return migrated_payload
+
+    for variable_payload in conversation_variables.values():
+        if isinstance(variable_payload, dict):
+            variable_payload.setdefault("writable", True)
+
+    return migrated_payload
+
+
+def _reconcile_graph_known_legacy_writable_variables(
+    *,
+    variable_pool: VariablePool,
+    graph: GraphProtocol | Graph | None,
+) -> None:
+    if graph is None or not isinstance(graph.nodes, Mapping):
+        return
+
+    for mapped_node_id, node in graph.nodes.items():
+        node_id = (
+            mapped_node_id
+            if isinstance(mapped_node_id, str)
+            else getattr(
+                node,
+                "id",
+                None,
+            )
+        )
+        if not isinstance(node_id, str):
+            continue
+
+        if getattr(node, "node_type", None) == BuiltinNodeTypes.LOOP:
+            node_data = getattr(node, "node_data", None)
+            loop_variables = getattr(node_data, "loop_variables", ()) or ()
+            for loop_variable in loop_variables:
+                label = getattr(loop_variable, "label", None)
+                if isinstance(label, str):
+                    variable_pool.set_writable((node_id, label), writable=True)
+            continue
+
+        if getattr(node, "node_type", None) == BuiltinNodeTypes.ITERATION:
+            variable_pool.set_writable((node_id, "index"), writable=True)
+            variable_pool.set_writable((node_id, "item"), writable=True)

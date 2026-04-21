@@ -204,6 +204,19 @@ class TestVariablePoolGetAndNestedAttribute:
         assert variable is not None
         assert variable.writable is True
 
+    def test_add_preserves_existing_writable_when_replacing_with_plain_value(
+        self,
+    ) -> None:
+        pool = VariablePool.empty()
+        pool.add(("conversation", "session_name"), "before", writable=True)
+
+        pool.add(("conversation", "session_name"), "after")
+
+        variable = pool.get_variable(("conversation", "session_name"))
+        assert variable is not None
+        assert variable.value == "after"
+        assert variable.writable is True
+
     def test_from_bootstrap_marks_conversation_writable_and_system_read_only(
         self,
     ) -> None:
