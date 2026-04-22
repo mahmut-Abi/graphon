@@ -84,10 +84,10 @@ class HttpResponse:
         if self._cached_text is not None:
             return self._cached_text
 
-        detected_encoding = charset_normalizer.from_bytes(self.content).best()
-        if detected_encoding and detected_encoding.encoding:
+        charset = self._extract_charset_from_content_type()
+        if charset:
             try:
-                self._cached_text = self.content.decode(detected_encoding.encoding)
+                self._cached_text = self.content.decode(charset)
             except (UnicodeDecodeError, TypeError, LookupError):
                 pass
             else:
@@ -97,8 +97,29 @@ class HttpResponse:
             self._cached_text = self._fallback_text
             return self._cached_text
 
+        detected_encoding = charset_normalizer.from_bytes(self.content).best()
+        if detected_encoding and detected_encoding.encoding:
+            try:
+                self._cached_text = self.content.decode(detected_encoding.encoding)
+            except (UnicodeDecodeError, TypeError, LookupError):
+                pass
+            else:
+                return self._cached_text
+
         self._cached_text = self.content.decode("utf-8", errors="replace")
         return self._cached_text
+
+    def _extract_charset_from_content_type(self) -> str | None:
+        content_type = self.headers.get("content-type", "")
+        if not content_type:
+            return None
+
+        for param in content_type.split(";")[1:]:
+            key, sep, value = param.partition("=")
+            if sep and key.strip().lower() == "charset":
+                charset = value.strip().strip("\"'")
+                return charset or None
+        return None
 
     def raise_for_status(self) -> None:
         if not self.is_success:
