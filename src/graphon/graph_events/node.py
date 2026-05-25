@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import Field
 
 from graphon.entities.pause_reason import PauseReason
+from graphon.variables.segments import Segment
 from graphon.variables.variables import Variable
 
 from .base import GraphNodeEventBase
@@ -31,6 +32,15 @@ class NodeRunStreamChunkEvent(GraphNodeEventBase):
     is_final: bool = Field(
         default=False,
         description="indicates if this is the last chunk",
+    )
+
+
+class NodeRunModelPollingProgressEvent(GraphNodeEventBase):
+    attempt: int = Field(..., ge=0, description="polling check attempt count")
+    last_checked_at: datetime = Field(..., description="last polling check time")
+    next_check_at: datetime | None = Field(
+        default=None,
+        description="next polling check time; None means no further check is scheduled",
     )
 
 
@@ -90,6 +100,10 @@ class NodeRunHumanInputFormFilledEvent(GraphNodeEventBase):
     action_text: str = Field(
         ...,
         description="Display text of the chosen action button.",
+    )
+    submitted_data: Mapping[str, Segment] = Field(
+        default_factory=dict,
+        description="Runtime submitted values keyed by form output variable name.",
     )
 
 

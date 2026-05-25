@@ -1,5 +1,3 @@
-# ruff: noqa: SLF001
-
 import json
 from unittest.mock import MagicMock
 

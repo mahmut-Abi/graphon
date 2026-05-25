@@ -18,9 +18,11 @@ from graphon.model_runtime.protocols.text_embedding_runtime import (
     TextEmbeddingModelRuntime,
 )
 from graphon.model_runtime.protocols.tts_runtime import TTSModelRuntime
-from graphon.nodes.code.code_node import WorkflowCodeExecutor
+from graphon.nodes.code.code_node import CodeExecutorProtocol
 from graphon.nodes.llm.protocols import CredentialsProvider, ModelFactory
 from graphon.nodes.llm.runtime_protocols import (
+    LLMPollingCapableProtocol,
+    LLMProtocol,
     PreparedLLMProtocol,
     PromptMessageSerializerProtocol,
     RetrieverAttachmentLoaderProtocol,
@@ -35,6 +37,7 @@ from graphon.nodes.runtime import (
     HumanInputNodeRuntimeProtocol,
     ToolNodeRuntimeProtocol,
 )
+from graphon.protocols import CodeExecutorProtocol as PublicCodeExecutorProtocol
 from graphon.protocols import (
     CredentialsProvider as PublicCredentialsProvider,
 )
@@ -54,6 +57,10 @@ from graphon.protocols import (
     HumanInputNodeRuntimeProtocol as PublicHumanInputNodeRuntimeProtocol,
 )
 from graphon.protocols import LLMModelRuntime as PublicLLMModelRuntime
+from graphon.protocols import (
+    LLMPollingCapableProtocol as PublicLLMPollingCapableProtocol,
+)
+from graphon.protocols import LLMProtocol as PublicLLMProtocol
 from graphon.protocols import ModelFactory as PublicModelFactory
 from graphon.protocols import ModelProviderRuntime as PublicModelProviderRuntime
 from graphon.protocols import ModelRuntime as PublicModelRuntime
@@ -82,7 +89,6 @@ from graphon.protocols import ToolFileManagerProtocol as PublicToolFileManagerPr
 from graphon.protocols import ToolNodeRuntimeProtocol as PublicToolNodeRuntimeProtocol
 from graphon.protocols import TTSModelRuntime as PublicTTSModelRuntime
 from graphon.protocols import VariableLoader as PublicVariableLoader
-from graphon.protocols import WorkflowCodeExecutor as PublicWorkflowCodeExecutor
 from graphon.protocols import (
     WorkflowFileRuntimeProtocol as PublicWorkflowFileRuntimeProtocol,
 )
@@ -108,10 +114,12 @@ def test_public_protocol_exports_match_canonical_definitions() -> None:
     assert PublicTTSModelRuntime is TTSModelRuntime
     assert PublicModelRuntime is ModelRuntime
     assert PublicPromptMessageMemory is PromptMessageMemory
-    assert PublicWorkflowCodeExecutor is WorkflowCodeExecutor
+    assert PublicCodeExecutorProtocol is CodeExecutorProtocol
     assert PublicCredentialsProvider is CredentialsProvider
     assert PublicModelFactory is ModelFactory
+    assert PublicLLMProtocol is LLMProtocol
     assert PublicPreparedLLMProtocol is PreparedLLMProtocol
+    assert PublicLLMPollingCapableProtocol is LLMPollingCapableProtocol
     assert PublicPromptMessageSerializerProtocol is PromptMessageSerializerProtocol
     assert PublicRetrieverAttachmentLoaderProtocol is RetrieverAttachmentLoaderProtocol
     assert PublicFileManagerProtocol is FileManagerProtocol
@@ -127,6 +135,7 @@ def test_public_protocol_exports_match_canonical_definitions() -> None:
 
 def test_public_protocol_package_exports_are_stable() -> None:
     assert protocols.__all__ == [
+        "CodeExecutorProtocol",
         "CredentialsProvider",
         "FileManagerProtocol",
         "FileReferenceFactoryProtocol",
@@ -136,6 +145,8 @@ def test_public_protocol_package_exports_are_stable() -> None:
         "HumanInputFormStateProtocol",
         "HumanInputNodeRuntimeProtocol",
         "LLMModelRuntime",
+        "LLMPollingCapableProtocol",
+        "LLMProtocol",
         "ModelFactory",
         "ModelProviderRuntime",
         "ModelRuntime",
@@ -154,6 +165,5 @@ def test_public_protocol_package_exports_are_stable() -> None:
         "ToolFileManagerProtocol",
         "ToolNodeRuntimeProtocol",
         "VariableLoader",
-        "WorkflowCodeExecutor",
         "WorkflowFileRuntimeProtocol",
     ]

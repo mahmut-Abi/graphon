@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, assert_never
 
 from graphon.file import file_manager
 from graphon.file.enums import FileType
@@ -46,7 +46,7 @@ from .exc import (
     NoPromptFoundError,
     TemplateTypeNotSupportError,
 )
-from .runtime_protocols import PreparedLLMProtocol
+from .runtime_protocols import LLMProtocol
 
 CONTEXT_PLACEHOLDER = "{{#context#}}"
 
@@ -56,7 +56,7 @@ VARIABLE_PATTERN = re.compile(r"\{\{#[^#]+#\}\}")
 MAX_RESOLVED_VALUE_LENGTH = 1024
 
 
-def fetch_model_schema(*, model_instance: PreparedLLMProtocol) -> AIModelEntity:
+def fetch_model_schema(*, model_instance: LLMProtocol) -> AIModelEntity:
     model_schema = model_instance.get_model_schema()
     if not model_schema:
         msg = (
@@ -69,7 +69,7 @@ def fetch_model_schema(*, model_instance: PreparedLLMProtocol) -> AIModelEntity:
 
 def build_model_identity_inputs(
     *,
-    model_instance: PreparedLLMProtocol,
+    model_instance: LLMProtocol,
 ) -> dict[str, Any]:
     """Expose the prepared model identity in node inputs."""
     return {
@@ -240,7 +240,7 @@ def fetch_prompt_messages(
     sys_files: Sequence[File],
     context: str = "",
     memory: PromptMessageMemory | None = None,
-    model_instance: PreparedLLMProtocol,
+    model_instance: LLMProtocol,
     prompt_template: Sequence[LLMNodeChatModelMessage]
     | LLMNodeCompletionModelPromptTemplate,
     stop: Sequence[str] | None = None,
@@ -475,15 +475,17 @@ def combine_message_content_with_role(
             return AssistantPromptMessage(content=contents)
         case PromptMessageRole.SYSTEM:
             return SystemPromptMessage(content=contents)
-        case _:
+        case PromptMessageRole.TOOL:
             msg = f"Role {role} is not supported"
             raise NotImplementedError(msg)
+        case _:
+            assert_never(role)
 
 
 def calculate_rest_token(
     *,
     prompt_messages: list[PromptMessage],
-    model_instance: PreparedLLMProtocol,
+    model_instance: LLMProtocol,
 ) -> int:
     rest_tokens = 2000
     runtime_model_schema = fetch_model_schema(model_instance=model_instance)
@@ -517,7 +519,7 @@ def handle_memory_chat_mode(
     *,
     memory: PromptMessageMemory | None,
     memory_config: MemoryConfig | None,
-    model_instance: PreparedLLMProtocol,
+    model_instance: LLMProtocol,
 ) -> Sequence[PromptMessage]:
     if not memory or not memory_config:
         return []
@@ -537,7 +539,7 @@ def handle_memory_completion_mode(
     *,
     memory: PromptMessageMemory | None,
     memory_config: MemoryConfig | None,
-    model_instance: PreparedLLMProtocol,
+    model_instance: LLMProtocol,
 ) -> str:
     if not memory or not memory_config:
         return ""

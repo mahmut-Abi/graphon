@@ -173,7 +173,7 @@ def test_question_classifier_constructor_accepts_dependency_bundle(
         ]),
     )
 
-    result = node._run()  # noqa: SLF001
+    result = node._run()
 
     assert result.process_data["prompts"] == ["serialized prompt"]
 
@@ -295,7 +295,7 @@ def test_question_classifier_run_returns_custom_class_label(
         ]),
     )
 
-    result = node._run()  # noqa: SLF001
+    result = node._run()
 
     assert result.outputs["class_name"] == "Questions about refunds"
     assert result.outputs["class_label"] == "Refund desk"
@@ -367,7 +367,7 @@ def test_question_classifier_run_falls_back_to_canonical_class_label(
         ]),
     )
 
-    result = node._run()  # noqa: SLF001
+    result = node._run()
 
     assert result.outputs["class_name"] == "Questions about refunds"
     assert result.outputs["class_label"] == "CLASS 2"

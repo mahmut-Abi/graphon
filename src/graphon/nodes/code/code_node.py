@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from textwrap import dedent
-from typing import Any, Protocol, TypeGuard, override
+from typing import Any, Protocol, TypeGuard, assert_never, override
 
 from graphon.entities.graph_init_params import GraphInitParams
 from graphon.enums import BuiltinNodeTypes, WorkflowNodeExecutionStatus
@@ -22,7 +23,8 @@ from .exc import (
 )
 
 
-class WorkflowCodeExecutor(Protocol):
+class CodeExecutorProtocol(Protocol):
+    @abstractmethod
     def execute(
         self,
         *,
@@ -31,6 +33,7 @@ class WorkflowCodeExecutor(Protocol):
         inputs: Mapping[str, Any],
     ) -> Mapping[str, Any]: ...
 
+    @abstractmethod
     def is_execution_error(self, error: Exception) -> bool: ...
 
 
@@ -86,7 +89,7 @@ class CodeNode(Node[CodeNodeData]):
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
-        code_executor: WorkflowCodeExecutor,
+        code_executor: CodeExecutorProtocol,
         code_limits: CodeNodeLimits,
     ) -> None:
         super().__init__(
@@ -95,7 +98,7 @@ class CodeNode(Node[CodeNodeData]):
             graph_init_params=graph_init_params,
             graph_runtime_state=graph_runtime_state,
         )
-        self._code_executor: WorkflowCodeExecutor = code_executor
+        self._code_executor: CodeExecutorProtocol = code_executor
         self._limits = code_limits
 
     @property
@@ -578,7 +581,8 @@ class CodeNode(Node[CodeNodeData]):
         depth: int,
     ) -> Any:
         value = result[output_name]
-        match output_config.type:
+        output_type = output_config.type
+        match output_type:
             case SegmentType.OBJECT:
                 transformed_value = self._transform_object_output(
                     value=value,
@@ -627,9 +631,20 @@ class CodeNode(Node[CodeNodeData]):
                     output_name=output_name,
                     prefix=prefix,
                 )
-            case _:
-                msg = f"Output type {output_config.type} is not supported."
+            case (
+                SegmentType.INTEGER
+                | SegmentType.FLOAT
+                | SegmentType.SECRET
+                | SegmentType.FILE
+                | SegmentType.ARRAY_ANY
+                | SegmentType.ARRAY_FILE
+                | SegmentType.NONE
+                | SegmentType.GROUP
+            ):
+                msg = f"Output type {output_type} is not supported."
                 raise OutputValidationError(msg)
+            case _:
+                assert_never(output_type)
         return transformed_value
 
     def _transform_result(

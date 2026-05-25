@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import Generator, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Any, override
+from typing import Any, assert_never, override
 
 from graphon.entities.graph_init_params import GraphInitParams
 from graphon.entities.pause_reason import HumanInputRequired
@@ -21,6 +21,7 @@ from graphon.node_events.node import (
     StreamCompletedEvent,
 )
 from graphon.nodes.base.node import Node
+from graphon.nodes.protocols import FileReferenceFactoryProtocol
 from graphon.nodes.runtime import (
     HumanInputFormStateProtocol,
     HumanInputNodeRuntimeProtocol,
@@ -28,10 +29,20 @@ from graphon.nodes.runtime import (
     _normalize_human_input_runtime,
 )
 from graphon.runtime.graph_runtime_state import GraphRuntimeState
+from graphon.variables.factory import build_segment
+from graphon.variables.segments import Segment
 from graphon.workflow_type_encoder import WorkflowRuntimeTypeConverter
 
-from .entities import HumanInputNodeData
-from .enums import HumanInputFormStatus, PlaceholderType
+from . import _exc as exc
+from .entities import (
+    FileInputConfig,
+    FileListInputConfig,
+    FormInputConfig,
+    HumanInputNodeData,
+    ParagraphInputConfig,
+    SelectInputConfig,
+)
+from .enums import HumanInputFormStatus
 
 _SELECTED_BRANCH_KEY = "selected_branch"
 
@@ -73,6 +84,7 @@ class HumanInputNode(Node[HumanInputNodeData]):
         # Make `runtime` optional once Graphon provides a default human-input
         # runtime adapter instead of requiring an embedding-specific implementation.
         runtime: _HumanInputRuntimeLike,
+        file_reference_factory: FileReferenceFactoryProtocol,
         form_repository: object | None = None,
     ) -> None:
         super().__init__(
@@ -85,6 +97,7 @@ class HumanInputNode(Node[HumanInputNodeData]):
             runtime,
             form_repository=form_repository,
         )
+        self._file_reference_factory = file_reference_factory
 
     @classmethod
     @override
@@ -157,17 +170,13 @@ class HumanInputNode(Node[HumanInputNodeData]):
         variable_pool = self.graph_runtime_state.variable_pool
         resolved_defaults: dict[str, Any] = {}
         for form_input in self._node_data.inputs:
-            if (default_value := form_input.default) is None:
-                continue
-            if default_value.type == PlaceholderType.CONSTANT:
-                continue
-            resolved_value = variable_pool.get(default_value.selector)
-            if resolved_value is None:
+            resolved_default = form_input.resolve_default_value(variable_pool)
+            if resolved_default is None:
                 # Treat missing variable-backed defaults as absent defaults.
                 continue
             resolved_defaults[form_input.output_variable_name] = (
                 WorkflowRuntimeTypeConverter().value_to_json_encodable_recursive(
-                    resolved_value.value,
+                    resolved_default.value,
                 )
             )
 
@@ -236,10 +245,11 @@ class HumanInputNode(Node[HumanInputNodeData]):
             yield StreamCompletedEvent(
                 node_run_result=NodeRunResult(
                     status=WorkflowNodeExecutionStatus.SUCCEEDED,
-                    outputs={
-                        self._OUTPUT_FIELD_ACTION_ID: "",
-                        self._OUTPUT_FIELD_ACTION_VALUE: "",
-                    },
+                    outputs=self._build_special_outputs(
+                        action_id="",
+                        action_value="",
+                        rendered_content=form.rendered_content,
+                    ),
                     edge_source_handle=self._TIMEOUT_HANDLE,
                 ),
             )
@@ -256,18 +266,35 @@ class HumanInputNode(Node[HumanInputNodeData]):
                 f"form_id={form.id}"
             )
             raise AssertionError(msg)
-        submitted_inputs = dict(form.submitted_data or {})
-        outputs: dict[str, Any] = dict(submitted_inputs)
-        outputs[self._OUTPUT_FIELD_ACTION_ID] = selected_action_id
-        outputs[self._OUTPUT_FIELD_ACTION_VALUE] = (
-            self._node_data.must_resolve_action_value(selected_action_id)
+        restored_submission_data = self._restore_submitted_data(
+            submitted_data=form.submitted_data or {},
+        )
+        inputs_by_name = {
+            form_input.output_variable_name: form_input
+            for form_input in self._node_data.inputs
+        }
+        submitted_data: dict[str, Segment] = {}
+        for name, value in restored_submission_data.items():
+            if name not in inputs_by_name:
+                logger.error("unexpected form data in submitted data, key=%s", name)
+                continue
+            submitted_data[name] = value
+        selected_action_value = next(
+            ua.title
+            for ua in self._node_data.user_actions
+            if ua.id == selected_action_id
         )
         rendered_content = self.render_form_content_with_outputs(
             form.rendered_content,
-            outputs,
+            submitted_data,
             self._node_data.outputs_field_names(),
+            self._node_data.inputs,
         )
-        outputs[self._OUTPUT_FIELD_RENDERED_CONTENT] = rendered_content
+        outputs = dict(submitted_data) | self._build_special_outputs(
+            action_id=selected_action_id,
+            action_value=selected_action_value,
+            rendered_content=rendered_content,
+        )
 
         action_text = self._node_data.find_action_text(selected_action_id)
 
@@ -276,12 +303,13 @@ class HumanInputNode(Node[HumanInputNodeData]):
             rendered_content=rendered_content,
             action_id=selected_action_id,
             action_text=action_text,
+            submitted_data=submitted_data,
         )
 
         yield StreamCompletedEvent(
             node_run_result=NodeRunResult(
                 status=WorkflowNodeExecutionStatus.SUCCEEDED,
-                inputs=submitted_inputs,
+                inputs=submitted_data,
                 outputs=outputs,
                 edge_source_handle=selected_action_id,
             ),
@@ -309,20 +337,165 @@ class HumanInputNode(Node[HumanInputNodeData]):
         form_content: str,
         outputs: Mapping[str, Any],
         field_names: Sequence[str],
+        form_inputs: Sequence[FormInputConfig] | None = None,
     ) -> str:
-        """Replace {{#$output.xxx#}} placeholders with submitted values."""
+        """Replace {{#$output.xxx#}} placeholders with submitted values.
+
+        Text inputs render their submitted value directly. File inputs render as
+        stable placeholders so the final content stays readable and does not
+        inline transport metadata.
+
+        Returns:
+            the interplated form content
+        """
+        inputs_by_name = {}
+        if form_inputs is not None:
+            inputs_by_name = {
+                form_input.output_variable_name: form_input
+                for form_input in form_inputs
+            }
+
         rendered_content = form_content
         for field_name in field_names:
             placeholder = "{{#$output." + field_name + "#}}"
-            value = outputs.get(field_name)
-            if value is None:
-                replacement = ""
-            elif isinstance(value, (dict, list)):
-                replacement = json.dumps(value, ensure_ascii=False)
-            else:
-                replacement = str(value)
+            replacement = HumanInputNode._render_output_placeholder_value(
+                value=outputs.get(field_name),
+                form_input=inputs_by_name.get(field_name),
+            )
             rendered_content = rendered_content.replace(placeholder, replacement)
         return rendered_content
+
+    @staticmethod
+    def _render_output_placeholder_value(
+        *,
+        value: Any,
+        form_input: FormInputConfig | None,
+    ) -> str:
+        if isinstance(value, Segment):
+            value = WorkflowRuntimeTypeConverter().value_to_json_encodable_recursive(
+                value,
+            )
+
+        if value is None:
+            return ""
+
+        if isinstance(form_input, FileInputConfig):
+            return "[file]"
+
+        if isinstance(form_input, FileListInputConfig):
+            file_count = 0
+            if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+                file_count = len(value)
+            return f"[{file_count} files]"
+
+        if isinstance(form_input, ParagraphInputConfig | SelectInputConfig):
+            return str(value)
+
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+
+        return str(value)
+
+    def _restore_submitted_data(
+        self,
+        *,
+        submitted_data: Mapping[str, Any],
+    ) -> dict[str, Segment]:
+        """_restore_submitted_data restruct python data types from
+        **validated form data**.
+
+        Returns:
+            A mapping from input field names to their corresponding
+            graphon runtime values.
+
+        Raises:
+            InvalidSubmittedDataError: if submission data are invalid.
+        """
+        # NOTE: ideally this logic shoule be integrated into
+        # `HumanInputFormStateProtocol.submitted_data`.
+
+        restored_data: dict[str, Segment] = {}
+        inputs_by_name = {
+            form_input.output_variable_name: form_input
+            for form_input in self._node_data.inputs
+        }
+
+        for name, value in submitted_data.items():
+            form_input = inputs_by_name.get(name)
+            if form_input is None:
+                restored_data[name] = build_segment(value)
+                continue
+
+            match form_input:
+                case FileInputConfig():
+                    if not isinstance(value, Mapping):
+                        msg = (
+                            "HumanInput file input expects a mapping payload, "
+                            f"output_variable_name={name}, got={type(value).__name__}"
+                        )
+                        raise exc.InvalidSubmittedDataError(msg)
+                    restored_data[name] = build_segment(
+                        self._restore_file_value(
+                            output_variable_name=name,
+                            value=value,
+                        )
+                    )
+                case FileListInputConfig():
+                    if not isinstance(value, list):
+                        msg = (
+                            "HumanInput file list input expects a list payload, "
+                            f"output_variable_name={name}, got={type(value).__name__}"
+                        )
+                        raise exc.InvalidSubmittedDataError(msg)
+                    if not all(isinstance(item, Mapping) for item in value):
+                        msg = (
+                            "HumanInput file list input expects list items to be "
+                            "mapping payloads, "
+                            f"output_variable_name={name}"
+                        )
+                        raise exc.InvalidSubmittedDataError(msg)
+                    restored_data[name] = build_segment([
+                        self._restore_file_value(
+                            output_variable_name=name,
+                            value=item,
+                        )
+                        for item in value
+                    ])
+                case ParagraphInputConfig() | SelectInputConfig():
+                    if not isinstance(value, str):
+                        msg = (
+                            "HumanInput file list input expects a string, "
+                            f"output_variable_name={name}, got={type(value).__name__}"
+                        )
+                        raise exc.InvalidSubmittedDataError(msg)
+                    restored_data[name] = build_segment(value)
+                case _:
+                    assert_never(form_input)
+
+        return restored_data
+
+    def _restore_file_value(
+        self,
+        *,
+        output_variable_name: str,
+        value: Any,
+    ) -> Any:
+        _ = output_variable_name
+        return self._file_reference_factory.build_from_mapping(mapping=value)
+
+    @classmethod
+    def _build_special_outputs(
+        cls,
+        *,
+        action_id: str,
+        action_value: str,
+        rendered_content: str,
+    ) -> dict[str, Segment]:
+        return {
+            cls._OUTPUT_FIELD_ACTION_ID: build_segment(action_id),
+            cls._OUTPUT_FIELD_RENDERED_CONTENT: build_segment(rendered_content),
+            cls._OUTPUT_FIELD_ACTION_VALUE: build_segment(action_value),
+        }
 
     @classmethod
     @override

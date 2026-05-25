@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import importlib
 import json
+from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 from pydantic import BaseModel, Field
 from pydantic_core import to_jsonable_python
@@ -19,38 +20,44 @@ if TYPE_CHECKING:
     from graphon.entities.graph_init_params import GraphInitParams
     from graphon.entities.pause_reason import PauseReason
     from graphon.graph.graph import Graph
-    from graphon.graph_events.node import NodeRunStreamChunkEvent, NodeRunSucceededEvent
 
 
 class ReadyQueueProtocol(Protocol):
     """Structural interface required from ready queue implementations."""
 
+    @abstractmethod
     def put(self, item: str) -> None:
         """Enqueue the identifier of a node that is ready to run."""
         ...
 
+    @abstractmethod
     def get(self, timeout: float | None = None) -> str:
         """Return the next node identifier,
         blocking until available or timeout expires.
         """
         ...
 
+    @abstractmethod
     def task_done(self) -> None:
         """Signal that the most recently dequeued node has completed processing."""
         ...
 
+    @abstractmethod
     def empty(self) -> bool:
         """Return True when the queue contains no pending nodes."""
         ...
 
+    @abstractmethod
     def qsize(self) -> int:
         """Approximate the number of pending nodes awaiting execution."""
         ...
 
+    @abstractmethod
     def dumps(self) -> str:
         """Serialize the queue contents for persistence."""
         ...
 
+    @abstractmethod
     def loads(self, data: str) -> None:
         """Restore the queue contents from a serialized payload."""
         ...
@@ -63,18 +70,22 @@ class NodeExecutionProtocol(Protocol):
     retry_count: int
     execution_id: str | None
 
+    @abstractmethod
     def mark_started(self, execution_id: str) -> None:
         """Mark the node execution as started."""
         ...
 
+    @abstractmethod
     def mark_taken(self) -> None:
         """Mark the node execution as successfully completed."""
         ...
 
+    @abstractmethod
     def mark_failed(self, error: str) -> None:
         """Mark the node execution as failed with an error."""
         ...
 
+    @abstractmethod
     def increment_retry(self) -> None:
         """Increment the retry counter for the node execution."""
         ...
@@ -98,85 +109,66 @@ class GraphExecutionProtocol(Protocol):
     pause_reasons: list[PauseReason]
 
     @property
+    @abstractmethod
     def node_executions(self) -> Mapping[str, NodeExecutionProtocol]:
         """Return the persisted node execution state keyed by node id."""
         ...
 
+    @abstractmethod
     def start(self) -> None:
         """Transition execution into the running state."""
         ...
 
+    @abstractmethod
     def complete(self) -> None:
         """Mark execution as successfully completed."""
         ...
 
+    @abstractmethod
     def abort(self, reason: str) -> None:
         """Abort execution in response to an external stop request."""
         ...
 
+    @abstractmethod
     def pause(self, reason: PauseReason) -> None:
         """Pause execution with a recorded reason."""
         ...
 
+    @abstractmethod
     def fail(self, error: Exception) -> None:
         """Record an unrecoverable error and end execution."""
         ...
 
+    @abstractmethod
     def record_node_failure(self) -> None:
         """Increment the count of node failures observed during execution."""
         ...
 
+    @abstractmethod
     def get_or_create_node_execution(self, node_id: str) -> NodeExecutionProtocol:
         """Return the execution entity for a node, creating it when needed."""
         ...
 
     @property
+    @abstractmethod
     def is_paused(self) -> bool:
         """Return whether the execution is currently paused."""
         ...
 
     @property
+    @abstractmethod
     def has_error(self) -> bool:
         """Return whether the execution has recorded an error."""
         ...
 
+    @abstractmethod
     def dumps(self) -> str:
         """Serialize execution state into a JSON payload."""
         ...
 
+    @abstractmethod
     def loads(self, data: str) -> None:
         """Restore execution state from a previously serialized payload."""
-        ...
-
-
-class ResponseStreamCoordinatorProtocol(Protocol):
-    """Structural interface for response stream coordinator."""
-
-    def register(self, response_node_id: str) -> None:
-        """Register a response node so its outputs can be streamed."""
-        ...
-
-    def track_node_execution(self, node_id: str, execution_id: str) -> None:
-        """Track the current execution id for a node."""
-        ...
-
-    def on_edge_taken(self, edge_id: str) -> Sequence[NodeRunStreamChunkEvent]:
-        """Update pending response sessions after an edge is taken."""
-        ...
-
-    def intercept_event(
-        self,
-        event: NodeRunStreamChunkEvent | NodeRunSucceededEvent,
-    ) -> Sequence[NodeRunStreamChunkEvent]:
-        """Translate node events into streamed response events."""
-        ...
-
-    def loads(self, data: str) -> None:
-        """Restore coordinator state from a serialized payload."""
-        ...
-
-    def dumps(self) -> str:
-        """Serialize coordinator state for persistence."""
         ...
 
 
@@ -186,8 +178,9 @@ class NodeProtocol(Protocol):
     id: str
     state: NodeState
     execution_type: NodeExecutionType
-    node_type: NodeType
+    node_type: ClassVar[NodeType]
 
+    @abstractmethod
     def blocks_variable_output(
         self,
         variable_selectors: set[tuple[str, ...]],
@@ -207,14 +200,24 @@ class GraphProtocol(Protocol):
     to the runtime state.
     """
 
-    nodes: Mapping[str, NodeProtocol]
-    edges: Mapping[str, EdgeProtocol]
-    root_node: NodeProtocol
+    @property
+    @abstractmethod
+    def nodes(self) -> Mapping[str, NodeProtocol]: ...
 
+    @property
+    @abstractmethod
+    def edges(self) -> Mapping[str, EdgeProtocol]: ...
+
+    @property
+    @abstractmethod
+    def root_node(self) -> NodeProtocol: ...
+
+    @abstractmethod
     def get_outgoing_edges(self, node_id: str) -> Sequence[EdgeProtocol]: ...
 
 
 class ChildGraphEngineBuilderProtocol(Protocol):
+    @abstractmethod
     def build_child_engine(
         self,
         *,
@@ -258,7 +261,6 @@ class _GraphRuntimeStateSnapshot:
     has_variable_pool: bool
     ready_queue_dump: str | None
     graph_execution_dump: str | None
-    response_coordinator_dump: str | None
     paused_nodes: tuple[str, ...]
     deferred_nodes: tuple[str, ...]
     graph_node_states: dict[str, NodeState]
@@ -343,7 +345,6 @@ class _GraphRuntimeExecutionData:
 class _GraphRuntimeSuspensionState:
     """Owned suspend/resume state that is restored around graph execution."""
 
-    pending_response_coordinator_dump: str | None = None
     pending_graph_execution_workflow_id: str | None = None
     paused_nodes: set[str] = field(default_factory=set)
     deferred_nodes: set[str] = field(default_factory=set)
@@ -436,16 +437,12 @@ class _GraphRuntimeBindings:
         runtime_state: GraphRuntimeState,
         ready_queue: ReadyQueueProtocol | None = None,
         graph_execution: GraphExecutionProtocol | None = None,
-        response_coordinator: ResponseStreamCoordinatorProtocol | None = None,
         execution_context: AbstractContextManager[object] | None = None,
     ) -> None:
         self._runtime_state = runtime_state
         self.graph: GraphProtocol | Graph | None = None
         self.ready_queue: ReadyQueueProtocol | None = ready_queue
         self.graph_execution: GraphExecutionProtocol | None = graph_execution
-        self.response_coordinator: ResponseStreamCoordinatorProtocol | None = (
-            response_coordinator
-        )
         self.execution_context: AbstractContextManager[object] = (
             execution_context if execution_context is not None else nullcontext(None)
         )
@@ -462,20 +459,6 @@ class _GraphRuntimeBindings:
 
         self.graph = graph
 
-        if self.response_coordinator is None:
-            self.response_coordinator = self._runtime_state.create_response_coordinator(
-                graph,
-            )
-
-        if (
-            suspension_state.pending_response_coordinator_dump is not None
-            and self.response_coordinator is not None
-        ):
-            self.response_coordinator.loads(
-                suspension_state.pending_response_coordinator_dump,
-            )
-            suspension_state.pending_response_coordinator_dump = None
-
         suspension_state.apply_pending_graph_state(graph)
 
     def configure(
@@ -489,8 +472,6 @@ class _GraphRuntimeBindings:
 
         _ = self.get_ready_queue()
         _ = self.get_graph_execution()
-        if self.graph is not None:
-            _ = self.get_response_coordinator()
 
     def bind_child_engine_builder(
         self,
@@ -528,16 +509,6 @@ class _GraphRuntimeBindings:
             self.graph_execution = self._runtime_state.create_graph_execution()
         return self.graph_execution
 
-    def get_response_coordinator(self) -> ResponseStreamCoordinatorProtocol:
-        if self.response_coordinator is None:
-            if self.graph is None:
-                msg = "Graph must be attached before accessing response coordinator"
-                raise ValueError(msg)
-            self.response_coordinator = self._runtime_state.create_response_coordinator(
-                self.graph,
-            )
-        return self.response_coordinator
-
     def set_execution_context(
         self,
         value: AbstractContextManager[object] | None,
@@ -571,24 +542,6 @@ class _GraphRuntimeBindings:
 
         self.get_graph_execution().loads(payload)
 
-    def restore_response_coordinator(
-        self,
-        payload: str | None,
-        suspension_state: _GraphRuntimeSuspensionState,
-    ) -> None:
-        if payload is None:
-            suspension_state.pending_response_coordinator_dump = None
-            self.response_coordinator = None
-            return
-
-        if self.graph is not None:
-            self.get_response_coordinator().loads(payload)
-            suspension_state.pending_response_coordinator_dump = None
-            return
-
-        suspension_state.pending_response_coordinator_dump = payload
-        self.response_coordinator = None
-
 
 class GraphRuntimeState:  # noqa: PLR0904
     """Mutable runtime state shared across graph execution components.
@@ -615,7 +568,6 @@ class GraphRuntimeState:  # noqa: PLR0904
         node_run_steps: int = 0,
         ready_queue: ReadyQueueProtocol | None = None,
         graph_execution: GraphExecutionProtocol | None = None,
-        response_coordinator: ResponseStreamCoordinatorProtocol | None = None,
         graph: GraphProtocol | Graph | None = None,
         execution_context: AbstractContextManager[object] | None = None,
     ) -> None:
@@ -632,7 +584,6 @@ class GraphRuntimeState:  # noqa: PLR0904
             runtime_state=self,
             ready_queue=ready_queue,
             graph_execution=graph_execution,
-            response_coordinator=response_coordinator,
             execution_context=execution_context,
         )
         if graph is not None:
@@ -649,10 +600,6 @@ class GraphRuntimeState:  # noqa: PLR0904
     @property
     def graph_execution(self) -> GraphExecutionProtocol:
         return self._bindings.get_graph_execution()
-
-    @property
-    def response_coordinator(self) -> ResponseStreamCoordinatorProtocol:
-        return self._bindings.get_response_coordinator()
 
     @property
     def execution_context(self) -> AbstractContextManager[object]:
@@ -785,14 +732,6 @@ class GraphRuntimeState:  # noqa: PLR0904
             self._bindings.graph,
         )
 
-        if (
-            self._bindings.response_coordinator is not None
-            and self._bindings.graph is not None
-        ):
-            snapshot["response_coordinator"] = (
-                self._bindings.response_coordinator.dumps()
-            )
-
         return json.dumps(to_jsonable_python(snapshot))
 
     @classmethod
@@ -854,13 +793,6 @@ class GraphRuntimeState:  # noqa: PLR0904
         """Create the graph execution aggregate used by this runtime state."""
         return self._build_graph_execution()
 
-    def create_response_coordinator(
-        self,
-        graph: GraphProtocol | Graph,
-    ) -> ResponseStreamCoordinatorProtocol:
-        """Create the response coordinator bound to the attached graph."""
-        return self._build_response_coordinator(graph)
-
     def _build_ready_queue(self) -> ReadyQueueProtocol:
         # Import lazily to avoid breaching architecture boundaries
         # enforced by import-linter.
@@ -875,15 +807,6 @@ class GraphRuntimeState:  # noqa: PLR0904
         workflow_id = self._suspension_state.pending_graph_execution_workflow_id or ""
         self._suspension_state.pending_graph_execution_workflow_id = None
         return graph_execution_cls(workflow_id=workflow_id)
-
-    def _build_response_coordinator(
-        self,
-        graph: GraphProtocol | Graph,
-    ) -> ResponseStreamCoordinatorProtocol:
-        # Lazily import to keep the runtime domain decoupled from graph_engine modules.
-        module = importlib.import_module("graphon.graph_engine.response_coordinator")
-        coordinator_cls = module.ResponseStreamCoordinator
-        return coordinator_cls(variable_pool=self.variable_pool, graph=graph)
 
     # ------------------------------------------------------------------
     # Snapshot helpers
@@ -939,7 +862,6 @@ class GraphRuntimeState:  # noqa: PLR0904
             has_variable_pool=has_variable_pool,
             ready_queue_dump=payload.get("ready_queue"),
             graph_execution_dump=payload.get("graph_execution"),
-            response_coordinator_dump=payload.get("response_coordinator"),
             paused_nodes=tuple(map(str, payload.get("paused_nodes", []))),
             deferred_nodes=tuple(map(str, payload.get("deferred_nodes", []))),
             graph_node_states=graph_node_states,
@@ -951,10 +873,6 @@ class GraphRuntimeState:  # noqa: PLR0904
         self._bindings.restore_ready_queue(snapshot.ready_queue_dump)
         self._bindings.restore_graph_execution(
             snapshot.graph_execution_dump,
-            self._suspension_state,
-        )
-        self._bindings.restore_response_coordinator(
-            snapshot.response_coordinator_dump,
             self._suspension_state,
         )
         self._suspension_state.apply_snapshot(snapshot)

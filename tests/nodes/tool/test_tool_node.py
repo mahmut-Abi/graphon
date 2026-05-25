@@ -1,15 +1,27 @@
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
+from time import time
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 
+from graphon.enums import BuiltinNodeTypes
 from graphon.file.enums import FileTransferMethod, FileType
 from graphon.file.models import File
+from graphon.graph_events.node import NodeRunFailedEvent, NodeRunSucceededEvent
 from graphon.model_runtime.entities.llm_entities import LLMUsage
 from graphon.node_events.node import StreamChunkEvent, StreamCompletedEvent
+from graphon.nodes.tool.entities import ToolNodeData, ToolProviderType
 from graphon.nodes.tool.exc import ToolNodeError
 from graphon.nodes.tool.tool_node import ToolNode
-from graphon.nodes.tool_runtime_entities import ToolRuntimeHandle, ToolRuntimeMessage
+from graphon.nodes.tool_runtime_entities import (
+    ToolRuntimeHandle,
+    ToolRuntimeMessage,
+    ToolRuntimeParameter,
+)
+from graphon.runtime.graph_runtime_state import GraphRuntimeState
+from tests.helpers.builders import build_graph_init_params, build_variable_pool
 
 
 def _message_stream(
@@ -35,31 +47,140 @@ class _StubToolRuntime:
         raise AssertionError(msg)
 
 
-class _StubToolFileManagerFactory:
+class _RunStubToolRuntime:
+    def __init__(self) -> None:
+        self.runtime_handle = ToolRuntimeHandle(raw=object())
+        self.messages = _message_stream()
+        self.usage = LLMUsage.empty_usage()
+        self.last_get_runtime_kwargs: dict[str, object] | None = None
+
+    def get_runtime(self, **kwargs: object) -> ToolRuntimeHandle:
+        self.last_get_runtime_kwargs = kwargs
+        return self.runtime_handle
+
+    def get_runtime_parameters(self, **_: object) -> list[ToolRuntimeParameter]:
+        return []
+
+    def invoke(self, **_: object) -> Generator[ToolRuntimeMessage, None, None]:
+        return self.messages
+
+    def build_file_reference(self, *, mapping: Mapping[str, Any]) -> object:
+        _ = mapping
+        return object()
+
+    def get_usage(self, *, tool_runtime: ToolRuntimeHandle) -> LLMUsage:
+        _ = tool_runtime
+        return self.usage
+
+
+class _RuntimeWithoutExecutionId:
+    def __init__(self) -> None:
+        self.runtime_handle = ToolRuntimeHandle(raw=object())
+        self.messages = _message_stream()
+        self.usage = LLMUsage.empty_usage()
+        self.last_get_runtime_kwargs: dict[str, object] | None = None
+
+    def get_runtime(
+        self,
+        *,
+        node_id: str,
+        node_data: object,
+        variable_pool: object,
+    ) -> ToolRuntimeHandle:
+        self.last_get_runtime_kwargs = {
+            "node_id": node_id,
+            "node_data": node_data,
+            "variable_pool": variable_pool,
+        }
+        return self.runtime_handle
+
+    def get_runtime_parameters(self, **_: object) -> list[ToolRuntimeParameter]:
+        return []
+
+    def invoke(self, **_: object) -> Generator[ToolRuntimeMessage, None, None]:
+        return self.messages
+
+    def build_file_reference(self, *, mapping: Mapping[str, Any]) -> object:
+        _ = mapping
+        return object()
+
+    def get_usage(self, *, tool_runtime: ToolRuntimeHandle) -> LLMUsage:
+        _ = tool_runtime
+        return self.usage
+
+
+class _StubToolFileManager:
     def __init__(self) -> None:
         self.get_file_generator_by_tool_file_id = MagicMock(return_value=(None, None))
+        self.create_file_by_raw: MagicMock = MagicMock(
+            side_effect=AssertionError("not used in this test"),
+        )
 
-    def create_file_by_raw(self, **_: object) -> object:
-        msg = "not used in this test"
-        raise AssertionError(msg)
 
-
-def _build_tool_node() -> tuple[
-    ToolNode, _StubToolRuntime, _StubToolFileManagerFactory
-]:
-    node = ToolNode.__new__(ToolNode)
-    node.init_node_identity("node-1")
-    runtime = _StubToolRuntime()
-    tool_file_manager_factory = _StubToolFileManagerFactory()
-    node.init_tool_runtime(
-        runtime=runtime,
-        tool_file_manager_factory=tool_file_manager_factory,
+def _tool_node_data(*, tool_node_version: str | None = None) -> ToolNodeData:
+    return ToolNodeData(
+        type=BuiltinNodeTypes.TOOL,
+        title="Tool node",
+        version="1",
+        provider_id="provider-id",
+        provider_type=ToolProviderType.BUILT_IN,
+        provider_name="provider-name",
+        tool_name="tool-name",
+        tool_label="Tool label",
+        tool_configurations={},
+        tool_parameters={},
+        tool_node_version=tool_node_version,
     )
-    return node, runtime, tool_file_manager_factory
+
+
+def _build_tool_node() -> tuple[ToolNode, _StubToolRuntime, _StubToolFileManager]:
+    runtime = _StubToolRuntime()
+    tool_file_manager = _StubToolFileManager()
+    node = ToolNode(
+        node_id="node-1",
+        data=_tool_node_data(),
+        graph_init_params=build_graph_init_params(),
+        graph_runtime_state=GraphRuntimeState(
+            variable_pool=build_variable_pool(),
+            start_at=time(),
+        ),
+        tool_file_manager=cast(Any, tool_file_manager),
+        runtime=cast(Any, runtime),
+    )
+    return node, runtime, tool_file_manager
+
+
+def _build_run_tool_node(
+    *,
+    runtime: object,
+    tool_node_version: str | None,
+) -> tuple[ToolNode, object]:
+    variable_pool = build_variable_pool(variables=[(["upstream", "answer"], "42")])
+    runtime_state = GraphRuntimeState(
+        variable_pool=variable_pool,
+        start_at=time(),
+        graph_execution=cast(
+            Any,
+            MagicMock(
+                node_executions={
+                    "node-1": MagicMock(execution_id="execution-from-runtime-state"),
+                },
+            ),
+        ),
+    )
+    node = ToolNode(
+        node_id="node-1",
+        data=_tool_node_data(tool_node_version=tool_node_version),
+        graph_init_params=build_graph_init_params(),
+        graph_runtime_state=runtime_state,
+        tool_file_manager=cast(Any, _StubToolFileManager()),
+        runtime=cast(Any, runtime),
+    )
+    return node, variable_pool
 
 
 def test_transform_message_dispatches_text_variable_and_file_messages() -> None:
-    node, _runtime, _tool_file_manager_factory = _build_tool_node()
+    node, _runtime, _tool_file_manager = _build_tool_node()
     file_obj = File(
         file_type=FileType.DOCUMENT,
         transfer_method=FileTransferMethod.LOCAL_FILE,
@@ -118,7 +239,7 @@ def test_transform_message_dispatches_text_variable_and_file_messages() -> None:
 
 
 def test_transform_message_dispatches_image_link_with_handler_map() -> None:
-    node, runtime, tool_file_manager_factory = _build_tool_node()
+    node, runtime, tool_file_manager = _build_tool_node()
     tool_file = File(
         file_type=FileType.IMAGE,
         transfer_method=FileTransferMethod.TOOL_FILE,
@@ -130,7 +251,7 @@ def test_transform_message_dispatches_image_link_with_handler_map() -> None:
         transfer_method=FileTransferMethod.TOOL_FILE,
         reference="tool-file-1",
     )
-    tool_file_manager_factory.get_file_generator_by_tool_file_id.return_value = (
+    tool_file_manager.get_file_generator_by_tool_file_id.return_value = (
         None,
         tool_file,
     )
@@ -167,8 +288,111 @@ def test_transform_message_dispatches_image_link_with_handler_map() -> None:
     )
 
 
+def test_transform_message_saves_raw_blob_message_as_tool_file() -> None:
+    node, runtime, tool_file_manager = _build_tool_node()
+    built_file = File(
+        file_type=FileType.CUSTOM,
+        transfer_method=FileTransferMethod.TOOL_FILE,
+        reference="tool-file-raw",
+    )
+    tool_file_manager.create_file_by_raw.side_effect = None
+    tool_file_manager.create_file_by_raw.return_value = SimpleNamespace(
+        id="tool-file-raw",
+    )
+    runtime.build_file_reference.return_value = built_file
+
+    events = list(
+        node.transform_message(
+            messages=_message_stream(
+                ToolRuntimeMessage(
+                    type=ToolRuntimeMessage.MessageType.BLOB,
+                    message=ToolRuntimeMessage.BlobMessage(blob=b"raw bytes"),
+                    meta={
+                        "mime_type": "application/octet-stream",
+                        "filename": "result.bin",
+                    },
+                ),
+            ),
+            tool_info={},
+            parameters_for_log={},
+            node_id="node-1",
+            tool_runtime=ToolRuntimeHandle(raw=object()),
+        ),
+    )
+
+    completed_event = events[-1]
+    assert isinstance(completed_event, StreamCompletedEvent)
+    assert completed_event.node_run_result.outputs["files"].value == [built_file]
+    tool_file_manager.create_file_by_raw.assert_called_once_with(
+        file_binary=b"raw bytes",
+        mimetype="application/octet-stream",
+        filename="result.bin",
+    )
+    runtime.build_file_reference.assert_called_once_with(
+        mapping={
+            "tool_file_id": "tool-file-raw",
+            "transfer_method": FileTransferMethod.TOOL_FILE,
+        },
+    )
+
+
+def test_transform_message_merges_blob_chunks_before_saving_file() -> None:
+    node, runtime, tool_file_manager = _build_tool_node()
+    built_file = File(
+        file_type=FileType.CUSTOM,
+        transfer_method=FileTransferMethod.TOOL_FILE,
+        reference="tool-file-chunked",
+    )
+    tool_file_manager.create_file_by_raw.side_effect = None
+    tool_file_manager.create_file_by_raw.return_value = SimpleNamespace(
+        id="tool-file-chunked",
+    )
+    runtime.build_file_reference.return_value = built_file
+
+    events = list(
+        node.transform_message(
+            messages=_message_stream(
+                ToolRuntimeMessage(
+                    type=ToolRuntimeMessage.MessageType.BLOB_CHUNK,
+                    message=ToolRuntimeMessage.BlobChunkMessage(
+                        id="blob-1",
+                        sequence=0,
+                        total_length=9,
+                        blob=b"raw ",
+                        end=False,
+                    ),
+                ),
+                ToolRuntimeMessage(
+                    type=ToolRuntimeMessage.MessageType.BLOB_CHUNK,
+                    message=ToolRuntimeMessage.BlobChunkMessage(
+                        id="blob-1",
+                        sequence=1,
+                        total_length=9,
+                        blob=b"bytes",
+                        end=True,
+                    ),
+                    meta={"mimetype": "application/octet-stream"},
+                ),
+            ),
+            tool_info={},
+            parameters_for_log={},
+            node_id="node-1",
+            tool_runtime=ToolRuntimeHandle(raw=object()),
+        ),
+    )
+
+    completed_event = events[-1]
+    assert isinstance(completed_event, StreamCompletedEvent)
+    assert completed_event.node_run_result.outputs["files"].value == [built_file]
+    tool_file_manager.create_file_by_raw.assert_called_once_with(
+        file_binary=b"raw bytes",
+        mimetype="application/octet-stream",
+        filename=None,
+    )
+
+
 def test_transform_message_rejects_non_file_payload_in_file_message() -> None:
-    node, _runtime, _tool_file_manager_factory = _build_tool_node()
+    node, _runtime, _tool_file_manager = _build_tool_node()
 
     with pytest.raises(ToolNodeError, match="Expected File object"):
         list(
@@ -186,3 +410,48 @@ def test_transform_message_rejects_non_file_payload_in_file_message() -> None:
                 tool_runtime=ToolRuntimeHandle(raw=object()),
             ),
         )
+
+
+@pytest.mark.parametrize(
+    ("tool_node_version", "expects_variable_pool"),
+    [
+        (None, False),
+        ("2", True),
+    ],
+)
+def test_run_passes_variable_pool_and_restored_execution_id_to_runtime(
+    *,
+    tool_node_version: str | None,
+    expects_variable_pool: bool,
+) -> None:
+    runtime = _RunStubToolRuntime()
+    node, variable_pool = _build_run_tool_node(
+        runtime=runtime,
+        tool_node_version=tool_node_version,
+    )
+
+    events = list(node.run())
+
+    assert runtime.last_get_runtime_kwargs == {
+        "node_id": "node-1",
+        "node_data": node.node_data,
+        "variable_pool": variable_pool if expects_variable_pool else None,
+        "node_execution_id": "execution-from-runtime-state",
+    }
+    assert node.execution_id == "execution-from-runtime-state"
+    assert events[0].id == "execution-from-runtime-state"
+    assert isinstance(events[-1], NodeRunSucceededEvent)
+
+
+def test_run_requires_runtime_adapter_to_accept_execution_id() -> None:
+    runtime = _RuntimeWithoutExecutionId()
+    node, _variable_pool = _build_run_tool_node(
+        runtime=runtime,
+        tool_node_version=None,
+    )
+
+    events = list(node.run())
+
+    assert runtime.last_get_runtime_kwargs is None
+    assert isinstance(events[-1], NodeRunFailedEvent)
+    assert "node_execution_id" in events[-1].error

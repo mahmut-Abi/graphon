@@ -7,9 +7,11 @@ from typing import Any, cast
 
 import pytest
 
+from graphon.file import File, FileTransferMethod, FileType
 from graphon.nodes.human_input.entities import HumanInputNodeData
 from graphon.nodes.human_input.enums import HumanInputFormStatus
 from graphon.nodes.human_input.human_input_node import HumanInputNode
+from graphon.nodes.protocols import FileReferenceFactoryProtocol
 from graphon.nodes.runtime import (
     HumanInputFormRepositoryBindableRuntimeProtocol,
     HumanInputFormStateProtocol,
@@ -20,7 +22,7 @@ from graphon.runtime.graph_runtime_state import GraphRuntimeState
 from ..helpers import build_graph_init_params, build_variable_pool
 
 
-class _StubHumanInputRuntime:
+class _StubHumanInputRuntime(HumanInputNodeRuntimeProtocol):
     def get_form(self, *, node_id: str) -> HumanInputFormStateProtocol | None:
         _ = node_id
         msg = "not used in this test"
@@ -74,6 +76,21 @@ class _StubFormState:
         return self._expiration_time
 
 
+class _FileReferenceFactory(FileReferenceFactoryProtocol):
+    def build_from_mapping(self, *, mapping: Mapping[str, Any]) -> File:
+        return File(
+            file_id=mapping.get("id"),
+            file_type=FileType(mapping["type"]),
+            transfer_method=FileTransferMethod(mapping["transfer_method"]),
+            remote_url=mapping.get("remote_url"),
+            related_id=mapping.get("related_id"),
+            filename=mapping.get("filename"),
+            extension=mapping.get("extension"),
+            mime_type=mapping.get("mime_type"),
+            size=mapping.get("size", -1),
+        )
+
+
 class _RunnableHumanInputRuntime(_StubHumanInputRuntime):
     def __init__(self) -> None:
         self.get_form_calls: list[str] = []
@@ -102,7 +119,9 @@ class _BindableHumanInputRuntime:
         *,
         bound_runtime: HumanInputNodeRuntimeProtocol | None = None,
     ) -> None:
-        self.bound_runtime = bound_runtime or _StubHumanInputRuntime()
+        self.bound_runtime: HumanInputNodeRuntimeProtocol = (
+            bound_runtime or _StubHumanInputRuntime()
+        )
         self.bound_repositories: list[object] = []
 
     def with_form_repository(
@@ -153,6 +172,7 @@ def _build_human_input_node(
             start_at=perf_counter(),
         ),
         runtime=runtime,
+        file_reference_factory=_FileReferenceFactory(),
         form_repository=form_repository,
     )
 

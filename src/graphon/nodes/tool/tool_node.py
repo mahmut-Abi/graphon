@@ -35,8 +35,13 @@ from graphon.runtime.graph_runtime_state import GraphRuntimeState
 from graphon.runtime.variable_pool import VariablePool
 from graphon.variables.segments import ArrayFileSegment
 
-from .entities import ToolNodeData
+from .entities import ToolInputType, ToolNodeData
 from .exc import ToolFileError, ToolNodeError, ToolParameterError
+
+_TEMPLATE_TOOL_INPUT_TYPES = frozenset((
+    ToolInputType.MIXED,
+    ToolInputType.CONSTANT,
+))
 
 
 @dataclass(slots=True)
@@ -45,6 +50,17 @@ class _ToolMessageState:
     files: list[File] = field(default_factory=list)
     json_values: list[dict | list] = field(default_factory=list)
     variables: dict[str, Any] = field(default_factory=dict)
+    blob_chunks: dict[str, "_BlobChunkState"] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _BlobChunkState:
+    total_length: int
+    bytes_written: int = 0
+    data: bytearray = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.data = bytearray(self.total_length)
 
 
 def _is_variable_selector(value: object) -> TypeIs[list[str]]:
@@ -64,7 +80,7 @@ class ToolNode(Node[ToolNodeData]):
         *,
         graph_init_params: GraphInitParams,
         graph_runtime_state: GraphRuntimeState,
-        tool_file_manager_factory: ToolFileManagerProtocol,
+        tool_file_manager: ToolFileManagerProtocol,
         # TODO @-LAN: See https://github.com/langgenius/graphon/issues/new/choose.  # noqa: FIX002
         # Make `runtime` optional once Graphon provides a default tool runtime
         # adapter at the workflow boundary.
@@ -76,18 +92,8 @@ class ToolNode(Node[ToolNodeData]):
             graph_init_params=graph_init_params,
             graph_runtime_state=graph_runtime_state,
         )
-        self._tool_file_manager_factory = tool_file_manager_factory
+        self._tool_file_manager = tool_file_manager
         self._runtime = runtime
-
-    def init_tool_runtime(
-        self,
-        *,
-        runtime: ToolNodeRuntimeProtocol,
-        tool_file_manager_factory: ToolFileManagerProtocol,
-    ) -> None:
-        """Hydrate tool-runtime collaborators for callers bypassing `__init__`."""
-        self._runtime = runtime
-        self._tool_file_manager_factory = tool_file_manager_factory
 
     @classmethod
     @override
@@ -121,10 +127,10 @@ class ToolNode(Node[ToolNodeData]):
                 or self.node_data.tool_node_version is not None
             ):
                 variable_pool = self.graph_runtime_state.variable_pool
-            tool_runtime = self._runtime.get_runtime(
-                node_id=self._node_id,
-                node_data=self.node_data,
+            node_execution_id = self.ensure_execution_id()
+            tool_runtime = self._get_tool_runtime(
                 variable_pool=variable_pool,
+                node_execution_id=node_execution_id,
             )
         except ToolNodeError as e:
             yield StreamCompletedEvent(
@@ -229,7 +235,7 @@ class ToolNode(Node[ToolNodeData]):
                 result[parameter_name] = None
                 continue
             tool_input = node_data.tool_parameters[parameter_name]
-            if tool_input.type == "variable":
+            if tool_input.type == ToolInputType.VARIABLE:
                 if not _is_variable_selector(tool_input.value):
                     msg = "Variable tool input value must be a list of strings."
                     raise ToolParameterError(msg)
@@ -240,7 +246,7 @@ class ToolNode(Node[ToolNodeData]):
                         raise ToolParameterError(msg)
                     continue
                 parameter_value = variable.value
-            elif tool_input.type in frozenset(("mixed", "constant")):
+            elif tool_input.type in _TEMPLATE_TOOL_INPUT_TYPES:
                 segment_group = variable_pool.convert_template(str(tool_input.value))
                 parameter_value = segment_group.log if for_log else segment_group.text
             else:
@@ -249,6 +255,19 @@ class ToolNode(Node[ToolNodeData]):
             result[parameter_name] = parameter_value
 
         return result
+
+    def _get_tool_runtime(
+        self,
+        *,
+        variable_pool: VariablePool | None,
+        node_execution_id: str,
+    ) -> ToolRuntimeHandle:
+        return self._runtime.get_runtime(
+            node_id=self._node_id,
+            node_data=self.node_data,
+            variable_pool=variable_pool,
+            node_execution_id=node_execution_id,
+        )
 
     def _transform_message(
         self,
@@ -333,9 +352,19 @@ class ToolNode(Node[ToolNodeData]):
             case ToolRuntimeMessage.MessageType.BLOB:
                 payload = self._expect_message_payload(
                     message=message,
-                    payload_type=ToolRuntimeMessage.TextMessage,
+                    payload_type=ToolRuntimeMessage.BlobMessage,
                 )
                 yield from self._handle_blob_message(
+                    payload=payload,
+                    meta=message.meta,
+                    state=state,
+                )
+            case ToolRuntimeMessage.MessageType.BLOB_CHUNK:
+                payload = self._expect_message_payload(
+                    message=message,
+                    payload_type=ToolRuntimeMessage.BlobChunkMessage,
+                )
+                yield from self._handle_blob_chunk_message(
                     payload=payload,
                     meta=message.meta,
                     state=state,
@@ -426,10 +455,8 @@ class ToolNode(Node[ToolNodeData]):
         return payload
 
     def _resolve_tool_file(self, tool_file_id: str, *, missing_message: str) -> File:
-        _stream, tool_file = (
-            self._tool_file_manager_factory.get_file_generator_by_tool_file_id(
-                tool_file_id,
-            )
+        _stream, tool_file = self._tool_file_manager.get_file_generator_by_tool_file_id(
+            tool_file_id,
         )
         if not tool_file:
             raise ToolFileError(missing_message)
@@ -476,21 +503,20 @@ class ToolNode(Node[ToolNodeData]):
     def _handle_blob_message(
         self,
         *,
-        payload: ToolRuntimeMessage.TextMessage,
+        payload: ToolRuntimeMessage.BlobMessage,
         meta: Mapping[str, Any] | None,
         state: _ToolMessageState,
         **_: Any,
     ) -> Generator[NodeEventBase, None, None]:
-        del payload
         tool_file_id = (meta or {}).get("tool_file_id")
-        if not isinstance(tool_file_id, str) or not tool_file_id:
-            msg = "tool blob message is missing tool_file_id metadata"
-            raise ToolFileError(msg)
+        if isinstance(tool_file_id, str) and tool_file_id:
+            self._resolve_tool_file(
+                tool_file_id,
+                missing_message=f"tool file {tool_file_id} not exists",
+            )
+        else:
+            tool_file_id = self._save_blob_as_tool_file(payload=payload, meta=meta)
 
-        self._resolve_tool_file(
-            tool_file_id,
-            missing_message=f"tool file {tool_file_id} not exists",
-        )
         blob_file_mapping: dict[str, Any] = {
             "tool_file_id": tool_file_id,
             "transfer_method": FileTransferMethod.TOOL_FILE,
@@ -498,6 +524,76 @@ class ToolNode(Node[ToolNodeData]):
         state.files.append(
             self._runtime.build_file_reference(mapping=blob_file_mapping),
         )
+        yield from ()
+
+    def _save_blob_as_tool_file(
+        self,
+        *,
+        payload: ToolRuntimeMessage.BlobMessage,
+        meta: Mapping[str, Any] | None,
+    ) -> str:
+        metadata = dict(meta or {})
+        mimetype = str(
+            metadata.get("mime_type")
+            or metadata.get("mimetype")
+            or "application/octet-stream",
+        )
+        raw_filename = metadata.get("filename")
+        filename = raw_filename if isinstance(raw_filename, str) else None
+        try:
+            tool_file = self._tool_file_manager.create_file_by_raw(
+                file_binary=payload.blob,
+                mimetype=mimetype,
+                filename=filename,
+            )
+        except Exception as error:
+            raise ToolFileError(str(error)) from error
+
+        tool_file_id = getattr(tool_file, "id", None)
+        if not isinstance(tool_file_id, str) or not tool_file_id:
+            msg = "created tool file is missing id"
+            raise ToolFileError(msg)
+        return tool_file_id
+
+    def _handle_blob_chunk_message(
+        self,
+        *,
+        payload: ToolRuntimeMessage.BlobChunkMessage,
+        meta: Mapping[str, Any] | None,
+        state: _ToolMessageState,
+        **_: Any,
+    ) -> Generator[NodeEventBase, None, None]:
+        if not payload.id:
+            msg = "tool blob chunk message is missing id"
+            raise ToolFileError(msg)
+        if payload.total_length < 0:
+            msg = "tool blob chunk total_length must be non-negative"
+            raise ToolFileError(msg)
+
+        chunk_state = state.blob_chunks.get(payload.id)
+        if chunk_state is None:
+            chunk_state = _BlobChunkState(total_length=payload.total_length)
+            state.blob_chunks[payload.id] = chunk_state
+        elif chunk_state.total_length != payload.total_length:
+            msg = f"tool blob chunk {payload.id} changed total_length"
+            raise ToolFileError(msg)
+
+        next_offset = chunk_state.bytes_written + len(payload.blob)
+        if next_offset > chunk_state.total_length:
+            msg = f"tool blob chunk {payload.id} exceeds declared total_length"
+            raise ToolFileError(msg)
+        chunk_state.data[chunk_state.bytes_written : next_offset] = payload.blob
+        chunk_state.bytes_written = next_offset
+
+        if payload.end:
+            del state.blob_chunks[payload.id]
+            yield from self._handle_blob_message(
+                payload=ToolRuntimeMessage.BlobMessage(
+                    blob=bytes(chunk_state.data[: chunk_state.bytes_written]),
+                ),
+                meta=meta,
+                state=state,
+            )
         yield from ()
 
     def _handle_text_message(
@@ -611,6 +707,11 @@ class ToolNode(Node[ToolNodeData]):
         self,
         state: _ToolMessageState,
     ) -> Generator[NodeEventBase, None, None]:
+        if state.blob_chunks:
+            pending_ids = ", ".join(sorted(state.blob_chunks))
+            msg = f"tool blob chunk stream ended before completion: {pending_ids}"
+            raise ToolFileError(msg)
+
         yield StreamChunkEvent(
             selector=[self._node_id, "text"],
             chunk="",
@@ -662,7 +763,7 @@ class ToolNode(Node[ToolNodeData]):
         for parameter_name in typed_node_data.tool_parameters:
             tool_input = typed_node_data.tool_parameters[parameter_name]
             match tool_input.type:
-                case "mixed":
+                case ToolInputType.MIXED:
                     if not isinstance(tool_input.value, str):
                         msg = "Mixed tool input value must be a string."
                         raise TypeError(msg)
@@ -671,13 +772,13 @@ class ToolNode(Node[ToolNodeData]):
                     ).extract_variable_selectors()
                     for selector in selectors:
                         result[selector.variable] = selector.value_selector
-                case "variable":
+                case ToolInputType.VARIABLE:
                     if not _is_variable_selector(tool_input.value):
                         msg = "Variable tool input value must be a list of strings."
                         raise TypeError(msg)
                     selector_key = ".".join(tool_input.value)
                     result[f"#{selector_key}#"] = tool_input.value
-                case "constant":
+                case ToolInputType.CONSTANT:
                     pass
 
         return {node_id + "." + key: value for key, value in result.items()}

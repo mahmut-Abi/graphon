@@ -176,7 +176,7 @@ def test_prepare_run_context_exposes_model_identity_in_inputs(
     )
     monkeypatch.setattr(node, "_build_run_prompt", lambda **_: ([], []))
 
-    run_context = node._prepare_run_context()  # noqa: SLF001
+    run_context = node._prepare_run_context()
 
     assert run_context.inputs["query"] == "weather in sf"
     assert run_context.inputs["model_provider"] == "test"
@@ -210,7 +210,7 @@ def test_parameter_extractor_run_emits_model_identity_in_inputs(
     )
     monkeypatch.setattr(node.model_instance, "invoke_llm", lambda **_: invoke_result)
 
-    result = node._run()  # noqa: SLF001
+    result = node._run()
 
     assert result.inputs["query"] == "weather in sf"
     assert result.inputs["model_provider"] == "test"

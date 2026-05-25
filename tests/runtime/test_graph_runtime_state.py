@@ -1,30 +1,86 @@
 import json
 from time import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
+from graphon.file import File, FileTransferMethod, FileType
 from graphon.graph_engine.domain.graph_execution import GraphExecution
 from graphon.graph_engine.ready_queue.in_memory import InMemoryReadyQueue
 from graphon.model_runtime.entities.llm_entities import LLMUsage
 from graphon.runtime.graph_runtime_state import GraphRuntimeState
 from graphon.runtime.read_only_wrappers import ReadOnlyGraphRuntimeStateWrapper
 from graphon.runtime.variable_pool import VariablePool
+from graphon.variables.segments import ArrayFileSegment, FileSegment
 from graphon.variables.variables import StringVariable
 
 CONVERSATION_VARIABLE_NODE_ID = "conversation"
 
-
-class StubCoordinator:
-    def __init__(self) -> None:
-        self.state = "initial"
-
-    def dumps(self) -> str:
-        return json.dumps({"state": self.state})
-
-    def loads(self, data: str) -> None:
-        payload = json.loads(data)
-        self.state = payload["state"]
+_HISTORICAL_FILE_SNAPSHOT_JSON_FROM_749751D_PARENT = (
+    """{
+  "version": "1.0",
+  "start_at": 123.0,
+  "total_tokens": 0,
+  "node_run_steps": 0,
+  "llm_usage": {
+    "prompt_tokens": 0,
+    "prompt_unit_price": "0.0",
+    "prompt_price_unit": "0.0",
+    "prompt_price": "0.0",
+    "completion_tokens": 0,
+    "completion_unit_price": "0.0",
+    "completion_price_unit": "0.0",
+    "completion_price": "0.0",
+    "total_tokens": 0,
+    "total_price": "0.0",
+    "currency": "USD",
+    "latency": 0.0,
+    "time_to_first_token": null,
+    "time_to_generate": null
+  },
+  "outputs": {},
+  "variable_pool": {
+    "variable_dictionary": {
+      "node1": {
+        "attachment": {
+          "value_type": "file",
+          "value": {
+            "dify_model_identity": "__dify__file__",
+            "id": "message-file-id",
+            "type": "document",
+            "transfer_method": "local_file",
+            "remote_url": null,
+            "reference": "upload-file-id",
+            "filename": "report.pdf",
+            "extension": ".pdf",
+            "mime_type": "application/pdf",
+            "size": 128
+          },
+          "id": "0759bf04-6fe1-4871-82b0-bc59ce96d43a",
+          "name": "attachment",
+          "description": "",
+          "selector": [
+            "node1",
+            "attachment"
+          ]
+        }
+      }
+    }
+  },
+  "ready_queue": "{\\"type\\":\\"InMemoryReadyQueue\\",\\"version\\":\\"1.0\\","""
+    """\\"items\\":[]}",
+  "graph_execution": "{\\"type\\":\\"GraphExecution\\",\\"version\\":\\"1.0\\","""
+    """\\"workflow_id\\":\\"\\",\\"started\\":false,\\"completed\\":false,"""
+    """\\"aborted\\":false,\\"paused\\":false,\\"pause_reasons\\":[],"""
+    """\\"error\\":null,\\"exceptions_count\\":0,\\"node_executions\\":[]}",
+  "paused_nodes": [],
+  "deferred_nodes": [],
+  "graph_state": {
+    "nodes": {},
+    "edges": {}
+  }
+}"""
+)
 
 
 class TestGraphRuntimeState:
@@ -134,31 +190,12 @@ class TestGraphRuntimeState:
         assert not execution.workflow_id
         assert state.graph_execution is execution
 
-    def test_response_coordinator_configuration(self) -> None:
-        variable_pool = VariablePool()
-        state = GraphRuntimeState(variable_pool=variable_pool, start_at=time())
-
-        with pytest.raises(
-            ValueError,
-            match="Graph must be attached before accessing response coordinator",
-        ):
-            _ = state.response_coordinator
-
+    def test_graph_configuration_rejects_different_graph(self) -> None:
+        state = GraphRuntimeState(variable_pool=VariablePool(), start_at=time())
         mock_graph = MagicMock()
-        with patch(
-            "graphon.graph_engine.response_coordinator.ResponseStreamCoordinator",
-            autospec=True,
-        ) as coordinator_cls:
-            coordinator_instance = coordinator_cls.return_value
-            state.configure(graph=mock_graph)
 
-            assert state.response_coordinator is coordinator_instance
-            coordinator_cls.assert_called_once_with(
-                variable_pool=variable_pool,
-                graph=mock_graph,
-            )
-
-            state.configure(graph=mock_graph)
+        state.configure(graph=mock_graph)
+        state.configure(graph=mock_graph)
 
         other_graph = MagicMock()
         with pytest.raises(
@@ -189,7 +226,7 @@ class TestGraphRuntimeState:
 
         assert wrapper_snapshot == state_snapshot
 
-    def test_dumps_and_loads_roundtrip_with_response_coordinator(self) -> None:
+    def test_dumps_and_loads_roundtrip(self) -> None:
         variable_pool = VariablePool()
         variable_pool.add(("node1", "value"), "payload")
 
@@ -213,18 +250,6 @@ class TestGraphRuntimeState:
         graph_execution.exceptions_count = 4
         graph_execution.started = True
 
-        mock_graph = MagicMock()
-        stub = StubCoordinator()
-        with patch.object(
-            GraphRuntimeState,
-            "_build_response_coordinator",
-            return_value=stub,
-            autospec=True,
-        ):
-            state.attach_graph(mock_graph)
-
-        stub.state = "configured"
-
         snapshot = state.dumps()
 
         restored = GraphRuntimeState.from_snapshot(snapshot)
@@ -245,16 +270,26 @@ class TestGraphRuntimeState:
         assert restored_execution.exceptions_count == 4
         assert restored_execution.started is True
 
-        new_stub = StubCoordinator()
-        with patch.object(
-            GraphRuntimeState,
-            "_build_response_coordinator",
-            return_value=new_stub,
-            autospec=True,
-        ):
-            restored.attach_graph(mock_graph)
+    def test_from_snapshot_ignores_legacy_response_coordinator_payload(self) -> None:
+        payload = {
+            "version": "1.0",
+            "start_at": 1.0,
+            "total_tokens": 0,
+            "node_run_steps": 0,
+            "llm_usage": LLMUsage.empty_usage().model_dump(mode="json"),
+            "outputs": {},
+            "variable_pool": VariablePool().model_dump(mode="json"),
+            "ready_queue": InMemoryReadyQueue().dumps(),
+            "graph_execution": GraphExecution(workflow_id="wf").dumps(),
+            "paused_nodes": [],
+            "deferred_nodes": [],
+            "graph_state": {"nodes": {}, "edges": {}},
+            "response_coordinator": '{"type":"ResponseStreamCoordinator"}',
+        }
 
-        assert new_stub.state == "configured"
+        state = GraphRuntimeState.from_snapshot(payload)
+
+        assert state.outputs == {}
 
     def test_loads_rehydrates_existing_instance(self) -> None:
         variable_pool = VariablePool()
@@ -270,29 +305,10 @@ class TestGraphRuntimeState:
         execution.workflow_id = "wf-456"
         execution.started = True
 
-        mock_graph = MagicMock()
-        original_stub = StubCoordinator()
-        with patch.object(
-            GraphRuntimeState,
-            "_build_response_coordinator",
-            return_value=original_stub,
-            autospec=True,
-        ):
-            state.attach_graph(mock_graph)
-
-        original_stub.state = "configured"
         snapshot = state.dumps()
 
-        new_stub = StubCoordinator()
-        with patch.object(
-            GraphRuntimeState,
-            "_build_response_coordinator",
-            return_value=new_stub,
-            autospec=True,
-        ):
-            restored = GraphRuntimeState(variable_pool=VariablePool(), start_at=0.0)
-            restored.attach_graph(mock_graph)
-            restored.loads(snapshot)
+        restored = GraphRuntimeState(variable_pool=VariablePool(), start_at=0.0)
+        restored.loads(snapshot)
 
         assert restored.total_tokens == 7
         assert restored.node_run_steps == 2
@@ -307,8 +323,6 @@ class TestGraphRuntimeState:
         restored_execution = restored.graph_execution
         assert restored_execution.workflow_id == "wf-456"
         assert restored_execution.started is True
-
-        assert new_stub.state == "configured"
 
     def test_snapshot_restore_preserves_updated_conversation_variable(self) -> None:
         variable_pool = VariablePool.from_bootstrap(
@@ -328,3 +342,40 @@ class TestGraphRuntimeState:
         ))
         assert restored_value is not None
         assert restored_value.value == "after"
+
+    def test_snapshot_restore_preserves_file_segments(self) -> None:
+        variable_pool = VariablePool()
+        file_value = File(
+            file_id="file-1",
+            file_type=FileType.DOCUMENT,
+            transfer_method=FileTransferMethod.REMOTE_URL,
+            remote_url="https://example.com/resume.pdf",
+            filename="resume.pdf",
+            extension=".pdf",
+            mime_type="application/pdf",
+            size=128,
+        )
+        variable_pool.add(("node", "attachment"), FileSegment(value=file_value))
+        variable_pool.add(("node", "attachments"), ArrayFileSegment(value=[file_value]))
+
+        state = GraphRuntimeState(variable_pool=variable_pool, start_at=time())
+
+        restored = GraphRuntimeState.from_snapshot(state.dumps())
+
+        restored_file = restored.variable_pool.get(("node", "attachment"))
+        restored_files = restored.variable_pool.get(("node", "attachments"))
+        assert isinstance(restored_file, FileSegment)
+        assert restored_file.value.filename == "resume.pdf"
+        assert isinstance(restored_files, ArrayFileSegment)
+        assert restored_files.value[0].filename == "resume.pdf"
+
+    def test_snapshot_restore_preserves_file_variable_id(self) -> None:
+        restored = GraphRuntimeState.from_snapshot(
+            _HISTORICAL_FILE_SNAPSHOT_JSON_FROM_749751D_PARENT,
+        )
+
+        restored_segment = restored.variable_pool.get(("node1", "attachment"))
+        assert restored_segment is not None
+        assert restored_segment.value.id == "message-file-id"
+        assert restored_segment.value.type == "document"
+        assert restored_segment.value.reference == "upload-file-id"

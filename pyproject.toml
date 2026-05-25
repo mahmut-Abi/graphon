@@ -1,6 +1,6 @@
 [project]
 name = 'graphon'
-version = "0.3.0"
+version = "0.4.0"
 description = 'Graph execution engine for agentic AI workflows.'
 readme = 'README.md'
 license = 'Apache-2.0'
@@ -79,6 +79,12 @@ ignore-one-line-docstrings = true
 'tests/**/*.py' = [
     'S101',    # Assert statements used for pytest.
     'PLR2004', # Magic value used in test cases.
+    'PLC2701', # Allow import private members from graphon module.
+    'PLC1901', # be more precise about assertion in tests.
+
+    # permit calls of private methods until we separate
+    # public interface tests from implementation tests.
+    'SLF001', # allow calls of private class methods in tests
 ]
 
 [tool.ty.environment]
